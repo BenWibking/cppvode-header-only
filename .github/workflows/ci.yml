@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} | ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install GCC 15 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-15 g++-15
+
+      - name: Install ccache (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ccache
+
+      - name: Install ccache (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.build_type }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'examples/**', 'tests/**', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.build_type }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Configure CMake (Linux, GCC 15)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=gcc-15 \
+            -DCMAKE_CXX_COMPILER=g++-15
+
+      - name: Configure CMake (macOS, Clang)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: |
+          cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Show compiler versions (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          gcc-15 --version
+          g++-15 --version
+
+      - name: Show compiler versions (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          clang --version
+          clang++ --version
+
+      - name: ccache stats
+        run: ccache -s || true
+
+      - name: Run tests (ctest)
+        run: |
+          ctest --test-dir build --output-on-failure -C ${{ matrix.build_type }}
+
+      - name: Run examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Single-config generators (Unix) place binaries directly under build/examples
+          build/examples/simple_ode
+          build/examples/robertson
