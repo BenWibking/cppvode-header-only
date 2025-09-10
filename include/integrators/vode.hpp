@@ -689,7 +689,7 @@ private:
 
 public:
     IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
-        const int max_steps = 10000;
+        const int max_steps = 1000;
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
         // Initialize
