@@ -2204,7 +2204,11 @@ C
 C
       IF (NFLAG .EQ. 0) THEN
         DSM = ACNRM/TQ(2)
-        WRITE(6,*) '[DVODE] POST ACNRM=', ACNRM, ' DSM=', DSM
+      WRITE(6,*) '[DVODE] POST ACNRM=', ACNRM, ' DSM=', DSM
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] ACCEPT_DEBUG',' TQ2=', TQ(2), ' DSM=', DSM,
+     &              ' RC=', RC, ' CRATE=', CRATE, ' NQWAIT=', NQWAIT
+      ENDIF
         WRITE(6,*) ' tq2=', TQ(2), ' JCUR=', JCUR, ' ICF=', ICF
         WRITE(6,*) ' CRATE=', CRATE, ' RC=', RC
         GO TO 450
@@ -2900,6 +2904,9 @@ C-----------------------------------------------------------------------
  220  M = 0
       DELP = ZERO
       CALL DCOPY (N, YH(1,1), 1, Y, 1 )
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] YH(:,1) (F90):', YH(1,1), YH(2,1), YH(3,1)
+      ENDIF
       CALL F (N, TN, Y, SAVF, RPAR, IPAR)
       NFE = NFE + 1
       IF (IPUP .LE. 0) GO TO 250
@@ -2930,6 +2937,7 @@ C-----------------------------------------------------------------------
       DO 290 I = 1,N
  290    Y(I) = SAVF(I) - ACOR(I)
       DEL = DVNORM (N, Y, EWT)
+      WRITE(6,*) '[DVODE] dvnlsd: M=', M, ' DEL=', DEL
       DO 300 I = 1,N
  300    Y(I) = YH(I,1) + SAVF(I)
       CALL DCOPY (N, SAVF, 1, ACOR, 1)
@@ -2942,7 +2950,23 @@ C 2/(1+RC) to account for changes in h*rl1 since the last DVJAC call.
 C-----------------------------------------------------------------------
  350  DO 360 I = 1,N
  360    Y(I) = (RL1*H)*SAVF(I) - (RL1*YH(I,2) + ACOR(I))
+      DEL = DVNORM (N, Y, EWT)
+      WRITE(6,*) '[DVODE] dvnlsd: RHS_DEL=', DEL
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] RHS (F90):', Y(1), Y(2), Y(3)
+      ENDIF
       CALL DVSOL (WM, IWM, Y, IERSL)
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] SOL (F90):', Y(1), Y(2), Y(3)
+         WRITE(6,*) '[DVODE] IPVT (F90):', IWM(31), IWM(32), IWM(33)
+         WRITE(6,*) '[DVODE] LU (F90):'
+         DO 991 J = 1, N
+            DO 992 I = 1, N
+               IDX = 2 + (J-1)*N + I
+               WRITE(6,*) '  (', I, ',', J, ')=', WM(IDX)
+ 992        CONTINUE
+ 991     CONTINUE
+      ENDIF
       NNI = NNI + 1
       IF (IERSL .GT. 0) GO TO 410
       IF (METH .EQ. 2 .AND. RC .NE. ONE) THEN
@@ -2950,6 +2974,7 @@ C-----------------------------------------------------------------------
         CALL DSCAL (N, CSCALE, Y, 1)
       ENDIF
       DEL = DVNORM (N, Y, EWT)
+      WRITE(6,*) '[DVODE] dvnlsd: M=', M, ' DEL=', DEL
       CALL DAXPY (N, ONE, Y, 1, ACOR, 1)
       DO 380 I = 1,N
  380    Y(I) = YH(I,1) + ACOR(I)
@@ -2959,6 +2984,8 @@ C rate constant is stored in CRATE, and this is used in the test.
 C-----------------------------------------------------------------------
  400  IF (M .NE. 0) CRATE = MAX(CRDOWN*CRATE,DEL/DELP)
       DCON = DEL*MIN(ONE,CRATE)/TQ(4)
+      WRITE(6,*) '[DVODE] dvnlsd: DCON=', DCON, ' CRATE=', CRATE
+      WRITE(6,*) ' RL1=', RL1, ' H=', H
       IF (DCON .LE. ONE) GO TO 450
       M = M + 1
       IF (M .EQ. MAXCOR) GO TO 410
@@ -3116,6 +3143,9 @@ C If JOK = -1 and MITER = 1, call JAC to evaluate Jacobian. ------------
       LENP = N*N
       DO 110 I = 1,LENP
  110    WM(I+2) = ZERO
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] Y for J (F90):', Y(1), Y(2), Y(3)
+      ENDIF
       CALL JAC (N, TN, Y, 0, 0, WM(3), N, RPAR, IPAR)
       IF (JSV .EQ. 1) CALL DCOPY (LENP, WM(3), 1, WM(LOCJS), 1)
       ENDIF
@@ -3161,6 +3191,15 @@ C Multiply Jacobian by scalar, add identity, and do LU decomposition. --
       DO 250 I = 1,N
         WM(J) = WM(J) + ONE
  250    J = J + NP1
+      IF (NST .EQ. 1) THEN
+         WRITE(6,*) '[DVODE] P (F90) before DGEFA:'
+         DO 993 J = 1, N
+            DO 994 I = 1, N
+               IDX = 2 + (J-1)*N + I
+               WRITE(6,*) '  (', I, ',', J, ')=', WM(IDX)
+ 994        CONTINUE
+ 993     CONTINUE
+      ENDIF
       NLU = NLU + 1
       CALL DGEFA (WM(3), N, N, IWM(31), IER)
       IF (IER .NE. 0) IERPJ = 1

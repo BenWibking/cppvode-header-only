@@ -191,6 +191,10 @@ private:
     static void dvjac(State& s) {
         // Build Jacobian J
         if (s.jacobian_analytic) {
+            if (s.n_step == 1 && !s.debug_dump_done) {
+                VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
+                VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
+            }
             jacobian(s.tn, s.y, s.jacobian);
         } else {
             // Numerical Jacobian using EWT-based step sizes
@@ -218,14 +222,32 @@ private:
         // Form P = I - h*rl1*J and factor
         const Real hrl1 = s.H * s.RL1;
         const Real con = -hrl1;
+        if (s.n_step == 1 && !s.debug_dump_done) {
+            VODE_DBG("DUMP J (C++):");
+            for (size_type i = 0; i < N; ++i) {
+                VODE_DBG("J row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            }
+        }
         for (size_type i = 0; i < N; ++i) {
             for (size_type j = 0; j < N; ++j) {
                 s.jacobian[i][j] *= con;
                 if (i == j) s.jacobian[i][j] += 1.0;
             }
         }
+        if (s.n_step == 1 && !s.debug_dump_done) {
+            VODE_DBG("DUMP P (C++):");
+            for (size_type i = 0; i < N; ++i) {
+                VODE_DBG("P row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            }
+        }
         int ier = linalg::lu_decomposition<N, true>(s.jacobian, s.pivot);
         s.JCUR = 1;
+        if (s.n_step == 1 && !s.debug_dump_done) {
+            VODE_DBG("DUMP LU (C++), ipvt=" << s.pivot[0] << "," << s.pivot[1] << "," << s.pivot[2]);
+            for (size_type i = 0; i < N; ++i) {
+                VODE_DBG("LU row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            }
+        }
         if (ier != 0) {
             // Mark as failure by setting ICF and leave factorization as-is
             s.ICF = 2;
@@ -271,12 +293,27 @@ private:
             // Build corrector RHS: (h*rl1)*f - (rl1*yh(:,2) + acor)
             std::array<Real, N> rhs_c{};
             for (size_type i = 0; i < N; ++i) rhs_c[i] = (s.RL1 * s.H) * s.savf[i] - (s.RL1 * s.YH(static_cast<int>(i+1), 2) + s.acor[i]);
+            if (s.n_step == 1 && !s.debug_dump_done) {
+                VODE_DBG("DUMP PRED YH2 (C++): " << s.YH(1,2) << ", " << s.YH(2,2) << ", " << s.YH(3,2));
+                VODE_DBG("DUMP SAVF (C++): " << s.savf[0] << ", " << s.savf[1] << ", " << s.savf[2]);
+            }
+            // Instrument: norm of RHS before solve
+            {
+                Real DELrhs = 0.0;
+                for (size_type i = 0; i < N; ++i) DELrhs += (rhs_c[i] * s.ewt[i]) * (rhs_c[i] * s.ewt[i]);
+                DELrhs = std::sqrt(DELrhs / static_cast<Real>(N));
+                VODE_DBG("dvnlsd: RHS_DEL=" << DELrhs);
+            }
             // Solve P * delta = rhs_c
             auto delta = rhs_c;
             linalg::lu_solve<N, true>(s.jacobian, s.pivot, delta);
             if (s.RC != 1.0) {
                 const Real CSCALE = 2.0 / (1.0 + s.RC);
                 for (size_type i = 0; i < N; ++i) delta[i] *= CSCALE;
+            }
+            if (s.n_step == 1 && !s.debug_dump_done) {
+                VODE_DBG("DUMP RHS (C++): " << rhs_c[0] << ", " << rhs_c[1] << ", " << rhs_c[2]);
+                VODE_DBG("DUMP SOL (C++): " << delta[0] << ", " << delta[1] << ", " << delta[2]);
             }
 
             // Compute norm of correction
@@ -312,6 +349,7 @@ private:
 
         // Success
         NFLAG = 0; s.JCUR = 0; s.ICF = 0;
+        if (s.n_step == 1 && !s.debug_dump_done) { s.debug_dump_done = true; }
         if (M != 0) {
             ACNRM = 0.0;
             for (size_type i = 0; i < N; ++i) ACNRM += (s.acor[i] * s.ewt[i]) * (s.acor[i] * s.ewt[i]);
@@ -417,9 +455,13 @@ private:
             if (s.NEWH != 0) {
                 if (s.NEWQ < s.NQ) { dvjust(-1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
                 else if (s.NEWQ > s.NQ) { dvjust(1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
-                // Apply the pending step-size change to the Nordsieck history
-                Real Rpre = 1.0; for (int j = 2; j <= s.L; ++j) { Rpre *= s.ETA; for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= Rpre; }
-                // Also update H and related scalars for the next step
+                // Rescale Nordsieck history by powers of ETA (Pascal transform)
+                Real Rpre = 1.0;
+                for (int j = 2; j <= s.L; ++j) {
+                    Rpre *= s.ETA;
+                    for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= Rpre;
+                }
+                // Apply the step-size change
                 s.H = s.H * s.ETA;
                 s.HSCAL = s.H;
                 s.RC *= s.ETA;
@@ -436,6 +478,7 @@ private:
             s.RL1 = 1.0 / s.EL(2);
             s.RC *= (s.RL1 / s.PRL1);
             s.PRL1 = s.RL1;
+            // No derivative refresh here; DVODE proceeds with predicted history
 
             VODE_DBG(
                 "PRE tn=" << s.tn <<
@@ -477,6 +520,11 @@ private:
 
             // Error test
             const Real DSM = ACNRM / s.TQ(2);
+            if (s.n_step == 1) {
+                VODE_DBG("ACCEPT_DEBUG ACOR=" << s.acor[0] << "," << s.acor[1] << "," << s.acor[2]
+                         << " TQ2=" << s.TQ(2) << " DSM=" << DSM << " RC=" << s.RC << " CRATE=" << s.CRATE
+                         << " NQWAIT=" << int(s.NQWAIT));
+            }
             VODE_DBG("POST ACNRM=" << ACNRM << " DSM=" << DSM << " tq2=" << s.TQ(2)
                 << " JCUR=" << int(s.JCUR) << " ICF=" << int(s.ICF) << " CRATE=" << s.CRATE << " RC=" << s.RC);
             if (DSM <= 1.0) {

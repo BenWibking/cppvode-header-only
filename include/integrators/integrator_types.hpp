@@ -56,6 +56,8 @@ struct IntegratorState {
     std::array<Real, N> y{};
     
     bool jacobian_analytic{false};
+    // Debug flag
+    bool debug_dump_done{false};
 };
 
 // RHS function interface
