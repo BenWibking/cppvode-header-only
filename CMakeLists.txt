@@ -19,6 +19,13 @@ target_include_directories(integrators INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
+# Optional verbose debug logging for VODE internals
+# Enable with: -DINTEGRATORS_VODE_DEBUG=ON
+option(INTEGRATORS_VODE_DEBUG "Enable verbose VODE debug logging" OFF)
+if(INTEGRATORS_VODE_DEBUG)
+    target_compile_definitions(integrators INTERFACE VODE_DEBUG)
+endif()
+
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(integrators INTERFACE
