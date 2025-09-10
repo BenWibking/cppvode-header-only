@@ -92,12 +92,10 @@ bool test_vode_convergence() {
         auto state = VODEState<1>{};
         state.jacobian_analytic = true;
         state.rtol = tol;
-        state.atol = tol * 1.e-6;
+        state.atol = 1.e-10;
         // Increase step limit for very tight tolerances
-        if (tol <= 1.e-10) {
-            state.max_steps = 100000;
-        } else if (tol <= 1.e-8) {
-            state.max_steps = 50000;
+        if (tol <= 1.e-6) {
+	  state.max_steps = 2e5;
         }
         
         ExponentialGrowth::state_type problem_state = {1.0};
@@ -113,7 +111,7 @@ bool test_vode_convergence() {
             errors.push_back(error);
             std::cout << "  tol = " << tol << ", error = " << error << ", steps = " << state.n_step << "\n";
         } else {
-            std::cout << "  tol = " << tol << ", FAILED\n";
+	    std::cout << "  tol = " << tol << ", steps = " << state.n_step << ", FAILED\n";
             failed_integrations++;
         }
     }
