@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Convergence tests for integrator algorithms
 // ABOUTME: Tests order of accuracy and convergence rates on simple test problems
 #include <iostream>

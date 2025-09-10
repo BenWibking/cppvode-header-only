@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Linear algebra utilities for integrator library
 // ABOUTME: Simplified LINPACK-style LU decomposition and solve routines
 #ifndef LINEAR_ALGEBRA_HPP

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Backward Euler integrator implementation
 // ABOUTME: Extracted from AMReX Microphysics with simplified interface
 #ifndef BACKWARD_EULER_HPP

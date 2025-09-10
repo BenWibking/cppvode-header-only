@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Simple ODE example demonstrating header-only integrator usage
 // ABOUTME: Solves dy/dt = -y with y(0) = 1, exact solution y(t) = exp(-t)
 #include <iostream>

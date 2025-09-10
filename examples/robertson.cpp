@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Robertson chemical kinetics problem example
 // ABOUTME: Classic stiff ODE test case: A -> B -> C with very different time scales
 #include <iostream>

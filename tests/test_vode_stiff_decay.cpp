@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Strict convergence test for VODE on a stiff linear decay
 #include <iostream>
 #include <vector>
@@ -67,4 +68,3 @@ int main() {
     std::cout << "Stiff decay test: PASSED\n";
     return 0;
 }
-

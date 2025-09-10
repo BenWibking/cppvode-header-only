@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Unit tests for linear algebra utilities
 // ABOUTME: Tests LU decomposition, matrix solve, and vector operations
 #include <iostream>

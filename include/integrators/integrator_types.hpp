@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Header-only integrator library - core type definitions and interfaces
 // ABOUTME: Extracted from AMReX Microphysics with AMReX dependencies removed
 #ifndef INTEGRATOR_TYPES_HPP

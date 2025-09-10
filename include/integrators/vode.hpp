@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: VODE integrator (BDF up to order 5) ported from Microphysics
 #ifndef VODE_HPP
 #define VODE_HPP

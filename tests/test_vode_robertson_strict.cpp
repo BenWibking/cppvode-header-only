@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Strict convergence test for VODE on the stiff Robertson problem
 #include <iostream>
 #include <vector>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Main header file for the header-only integrator library
 // ABOUTME: Includes all available integrator implementations
 #ifndef INTEGRATORS_HPP
