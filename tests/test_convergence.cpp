@@ -44,7 +44,7 @@ Real compute_error(Integrator& integrator, State& state, Real dt) {
     return std::abs(state.y[0] - exact);
 }
 
-void test_backward_euler_convergence() {
+bool test_backward_euler_convergence() {
     std::cout << "Testing Backward Euler convergence (expected order 1)...\n";
     
     auto integrator = BackwardEuler<ExponentialGrowth>{};
@@ -56,6 +56,11 @@ void test_backward_euler_convergence() {
         auto state = BackwardEulerState<1>{};
         state.jacobian_analytic = true;
         Real error = compute_error(integrator, state, dt);
+        if (error < 0.0) {
+            std::cout << "  dt = " << dt << ", INTEGRATOR FAILED\n";
+            std::cout << "  Backward Euler convergence: FAILED (integration failure)\n\n";
+            return false;
+        }
         errors.push_back(error);
         std::cout << "  dt = " << dt << ", error = " << error << "\n";
     }
@@ -66,18 +71,21 @@ void test_backward_euler_convergence() {
     
     if (rate > 0.8 && rate < 1.2) {
         std::cout << "  Backward Euler convergence: PASSED\n\n";
+        return true;
     } else {
-        std::cout << "  Backward Euler convergence: QUESTIONABLE\n\n";
+        std::cout << "  Backward Euler convergence: FAILED (rate outside acceptable range)\n\n";
+        return false;
     }
 }
 
-void test_vode_convergence() {
+bool test_vode_convergence() {
     std::cout << "Testing VODE convergence (expected high order)...\n";
     
     auto integrator = VODE<ExponentialGrowth>{};
     
     std::vector<Real> tolerances = {1.e-4, 1.e-6, 1.e-8, 1.e-10};
     std::vector<Real> errors;
+    int failed_integrations = 0;
     
     for (Real tol : tolerances) {
         auto state = VODEState<1>{};
@@ -99,7 +107,13 @@ void test_vode_convergence() {
             std::cout << "  tol = " << tol << ", error = " << error << ", steps = " << state.n_step << "\n";
         } else {
             std::cout << "  tol = " << tol << ", FAILED\n";
+            failed_integrations++;
         }
+    }
+    
+    if (failed_integrations > 0) {
+        std::cout << "  VODE error control: FAILED (" << failed_integrations << " integrations failed)\n\n";
+        return false;
     }
     
     if (errors.size() >= 2) {
@@ -113,9 +127,14 @@ void test_vode_convergence() {
         
         if (decreasing) {
             std::cout << "  VODE error control: PASSED\n\n";
+            return true;
         } else {
-            std::cout << "  VODE error control: QUESTIONABLE\n\n";
+            std::cout << "  VODE error control: FAILED (errors not decreasing with tighter tolerance)\n\n";
+            return false;
         }
+    } else {
+        std::cout << "  VODE error control: FAILED (insufficient successful integrations)\n\n";
+        return false;
     }
 }
 
@@ -125,9 +144,21 @@ int main() {
     std::cout << "Test problem: y' = y, y(0) = 1\n";
     std::cout << "Exact solution: y(t) = exp(t)\n\n";
     
-    test_backward_euler_convergence();
-    test_vode_convergence();
+    int failed_tests = 0;
     
-    std::cout << "Convergence tests completed!\n";
-    return 0;
+    if (!test_backward_euler_convergence()) {
+        failed_tests++;
+    }
+    
+    if (!test_vode_convergence()) {
+        failed_tests++;
+    }
+    
+    if (failed_tests > 0) {
+        std::cout << "OVERALL RESULT: " << failed_tests << " test(s) failed\n";
+        return 1;
+    } else {
+        std::cout << "OVERALL RESULT: All convergence tests passed\n";
+        return 0;
+    }
 }

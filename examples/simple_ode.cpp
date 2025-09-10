@@ -24,7 +24,7 @@ struct SimpleDecay {
     }
 };
 
-void test_integrator(const std::string& name, auto& integrator, auto& state) {
+bool test_integrator(const std::string& name, auto& integrator, auto& state) {
     using namespace integrators;
     
     // Set up problem: y(0) = 1, integrate to t = 1
@@ -40,6 +40,10 @@ void test_integrator(const std::string& name, auto& integrator, auto& state) {
     
     Real exact = std::exp(-1.0); // Exact solution at t=1
     Real error = std::abs(state.y[0] - exact);
+    Real relative_error = error / exact;
+    
+    // Consider test passed if integrator succeeded and relative error < 1%
+    bool test_passed = (result == IntegratorResult::SUCCESS) && (relative_error < 0.01);
     
     std::cout << name << ":\n";
     std::cout << "  Result: " << (result == IntegratorResult::SUCCESS ? "SUCCESS" : "FAILED") << "\n";
@@ -49,7 +53,10 @@ void test_integrator(const std::string& name, auto& integrator, auto& state) {
     std::cout << "  Final value: " << state.y[0] << "\n";
     std::cout << "  Exact value: " << exact << "\n";
     std::cout << "  Error: " << error << "\n";
-    std::cout << "  Relative error: " << error/exact << "\n\n";
+    std::cout << "  Relative error: " << relative_error << "\n";
+    std::cout << "  Test: " << (test_passed ? "PASSED" : "FAILED") << "\n\n";
+    
+    return test_passed;
 }
 
 int main() {
@@ -61,12 +68,16 @@ int main() {
     std::cout << "Exact solution: y(t) = exp(-t)\n";
     std::cout << "Integration interval: [0, 1]\n\n";
     
+    int failed_tests = 0;
+    
     // Test Backward Euler
     {
         auto integrator = BackwardEuler<SimpleDecay>{};
         auto state = BackwardEulerState<1>{};
         state.jacobian_analytic = true;
-        test_integrator("Backward Euler", integrator, state);
+        if (!test_integrator("Backward Euler", integrator, state)) {
+            failed_tests++;
+        }
     }
     
     // Test VODE
@@ -74,8 +85,16 @@ int main() {
         auto integrator = VODE<SimpleDecay>{};
         auto state = VODEState<1>{};
         state.jacobian_analytic = true;
-        test_integrator("VODE", integrator, state);
+        if (!test_integrator("VODE", integrator, state)) {
+            failed_tests++;
+        }
     }
     
-    return 0;
+    if (failed_tests > 0) {
+        std::cout << "OVERALL RESULT: " << failed_tests << " test(s) failed\n";
+        return 1;
+    } else {
+        std::cout << "OVERALL RESULT: All tests passed\n";
+        return 0;
+    }
 }
