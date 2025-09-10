@@ -1,9 +1,8 @@
 # Header-Only ODE Integrator Library
 
-A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides three robust integrators suitable for scientific computing applications:
+A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides two robust integrators suitable for scientific computing applications:
 
 - **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF)
-- **RKC**: Runge-Kutta-Chebyshev method for problems with large spectral radius  
 - **Backward Euler**: Simple implicit first-order method
 
 ## Features
@@ -77,11 +76,7 @@ make -j
 - **Pros**: Unconditionally stable, simple, reliable for stiff problems  
 - **Cons**: Only first-order accurate
 
-### RKC (Runge-Kutta-Chebyshev)
-- **Best for**: Problems with large spectral radius but not too stiff
-- **Method**: Explicit method with extended stability region
-- **Pros**: No linear solves needed, good for mildly stiff problems
-- **Cons**: Explicit method limitations, requires spectral radius estimation
+ 
 
 ## Problem Interface Requirements
 
@@ -108,7 +103,6 @@ include/integrators/     # Header files
 ├── integrator_types.hpp # Base types and utilities  
 ├── linear_algebra.hpp   # Linear algebra utilities
 ├── backward_euler.hpp   # Backward Euler integrator
-├── rkc.hpp             # RKC integrator
 ├── vode.hpp            # VODE integrator
 └── integrators.hpp     # Main header (includes all)
 

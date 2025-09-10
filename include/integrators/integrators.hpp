@@ -6,7 +6,6 @@
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 #include "backward_euler.hpp"
-#include "rkc.hpp"
 #include "vode.hpp"
 
 namespace integrators {
@@ -15,18 +14,12 @@ namespace integrators {
 template<typename Problem>
 struct IntegratorFactory {
     
-    enum class Type {
-        BACKWARD_EULER,
-        RKC,
-        VODE
-    };
+    enum class Type { BACKWARD_EULER, VODE };
     
     template<Type IntType>
     static auto create() {
         if constexpr (IntType == Type::BACKWARD_EULER) {
             return BackwardEuler<Problem>{};
-        } else if constexpr (IntType == Type::RKC) {
-            return RKC<Problem>{};
         } else if constexpr (IntType == Type::VODE) {
             return VODE<Problem>{};
         }
@@ -34,20 +27,14 @@ struct IntegratorFactory {
     
     template<Type IntType>
     using state_type = std::conditional_t<
-        IntType == Type::BACKWARD_EULER, BackwardEulerState<ProblemTraits<Problem>::neqs>,
-        std::conditional_t<
-            IntType == Type::RKC, RKCState<ProblemTraits<Problem>::neqs>,
-            VODEState<ProblemTraits<Problem>::neqs>
-        >
-    >;
+        IntType == Type::BACKWARD_EULER,
+        BackwardEulerState<ProblemTraits<Problem>::neqs>,
+        VODEState<ProblemTraits<Problem>::neqs>>;
 };
 
 // Convenience aliases
 template<typename Problem>
 using BE = BackwardEuler<Problem>;
-
-template<typename Problem>
-using RKC_Integrator = RKC<Problem>;
 
 template<typename Problem>
 using VODE_Integrator = VODE<Problem>;

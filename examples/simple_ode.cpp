@@ -68,13 +68,6 @@ int main() {
         test_integrator("Backward Euler", integrator, state);
     }
     
-    // Test RKC 
-    {
-        auto integrator = RKC<SimpleDecay>{};
-        auto state = RKCState<1>{};
-        test_integrator("RKC", integrator, state);
-    }
-    
     // Test VODE
     {
         auto integrator = VODE<SimpleDecay>{};

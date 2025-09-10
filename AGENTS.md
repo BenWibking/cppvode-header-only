@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `include/integrators/`: Header-only C++20 library (VODE, RKC, Backward Euler, linear algebra, types). Include via `#include <integrators/integrators.hpp>`.
+- `include/integrators/`: Header-only C++20 library (VODE, Backward Euler, linear algebra, types). Include via `#include <integrators/integrators.hpp>`.
 - `examples/`: Small programs demonstrating usage (`simple_ode.cpp`, `robertson.cpp`).
 - `tests/`: Executable tests using `assert` (no external framework).
 - `CMakeLists.txt`: Top-level build; adds `examples/` and `tests/` subdirectories; installs headers.
