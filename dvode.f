@@ -2264,9 +2264,12 @@ C-----------------------------------------------------------------------
         CALL DAXPY (N, EL(J), ACOR, 1, YH(1,J), 1 )
  480    CONTINUE
       NQWAIT = NQWAIT - 1
+      WRITE(6,*) '[DVODE] ACCEPT_POST NQWAIT=', NQWAIT, ' L=', L,
+     &           ' TQ5=', TQ(5), ' (pre-CONP update)'
       IF ((L .EQ. LMAX) .OR. (NQWAIT .NE. 1)) GO TO 490
       CALL DCOPY (N, ACOR, 1, YH(1,LMAX), 1 )
       CONP = TQ(5)
+      WRITE(6,*) '[DVODE] ACCEPT_POST set CONP=TQ5, CONP=', CONP
  490  IF (ETAMAX .NE. ONE) GO TO 560
       IF (NQWAIT .LT. 2) NQWAIT = 2
       NEWQ = NQ

@@ -11,12 +11,41 @@
 namespace integrators {
 namespace linalg {
 
-// LU decomposition with partial pivoting (LINPACK-style ipvt)
+#ifdef INTEGRATORS_USE_LAPACK
+extern "C" {
+void dgetrf_(int* m, int* n, double* a, int* lda, int* ipiv, int* info);
+void dgetrs_(const char* trans, int* n, int* nrhs, double* a, int* lda, int* ipiv, double* b, int* ldb, int* info);
+}
+#endif
+
+// LU decomposition with partial pivoting (prefer LAPACK if available)
 // Stores ipvt[k] = index of pivot row chosen at column k (0-based).
 // The matrix A is overwritten with L (unit diagonal implied) and U.
 template<size_type N, bool AllowPivoting = true>
 int lu_decomposition(std::array<std::array<Real, N>, N>& A,
                      std::array<int, N>& ipvt) {
+#ifdef INTEGRATORS_USE_LAPACK
+    // Use LAPACK dgetrf for highest parity with DVODE (column-major)
+    static_assert(std::is_same_v<Real, double>, "LAPACK path requires Real=double");
+    constexpr int n = static_cast<int>(N);
+    constexpr int lda = n;
+    double a[lda * n];
+    // Copy to column-major buffer
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) a[i + lda * j] = A[static_cast<size_type>(i)][static_cast<size_type>(j)];
+    }
+    int ipiv[n];
+    int info = 0;
+    dgetrf_(const_cast<int*>(&n), const_cast<int*>(&n), a, const_cast<int*>(&lda), ipiv, &info);
+    if (info != 0) return info;
+    // Copy LU back into A (still row/col positions correspond to (i,j))
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) A[static_cast<size_type>(i)][static_cast<size_type>(j)] = a[i + lda * j];
+    }
+    // Store pivots (convert to 0-based)
+    for (int k = 0; k < n; ++k) ipvt[static_cast<size_type>(k)] = ipiv[k] - 1;
+    return 0;
+#else
     for (size_type k = 0; k < N - 1; ++k) {
         // Find pivot index in column k (rows k..N-1)
         size_type pivot_row = k;
@@ -63,6 +92,7 @@ int lu_decomposition(std::array<std::array<Real, N>, N>& A,
         return static_cast<int>(N);
     }
     return 0;
+#endif
 }
 
 // Solve Ax = b given LU and ipvt from lu_decomposition (LINPACK-style)
@@ -70,6 +100,27 @@ template<size_type N, bool AllowPivoting = true>
 void lu_solve(const std::array<std::array<Real, N>, N>& LU,
               const std::array<int, N>& ipvt,
               std::array<Real, N>& x) {
+#ifdef INTEGRATORS_USE_LAPACK
+    static_assert(std::is_same_v<Real, double>, "LAPACK path requires Real=double");
+    constexpr int n = static_cast<int>(N);
+    constexpr int lda = n;
+    double a[lda * n];
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) a[i + lda * j] = LU[static_cast<size_type>(i)][static_cast<size_type>(j)];
+    }
+    int ipiv[n];
+    for (int k = 0; k < n; ++k) ipiv[k] = ipvt[static_cast<size_type>(k)] + 1; // back to 1-based
+    int info = 0;
+    int nrhs = 1;
+    int ldb = n;
+    double b[n];
+    for (int i = 0; i < n; ++i) b[i] = x[static_cast<size_type>(i)];
+    const char trans = 'N';
+    dgetrs_(&trans, const_cast<int*>(&n), &nrhs, a, const_cast<int*>(&lda), ipiv, b, &ldb, &info);
+    for (int i = 0; i < n; ++i) x[static_cast<size_type>(i)] = b[i];
+    (void)info;
+    return;
+#else
     // Apply row interchanges to x as recorded in ipvt
     if constexpr (AllowPivoting) {
         for (size_type k = 0; k < N - 1; ++k) {
@@ -96,6 +147,7 @@ void lu_solve(const std::array<std::array<Real, N>, N>& LU,
             x[static_cast<size_type>(i)] += t * LU[static_cast<size_type>(i)][static_cast<size_type>(k)];
         }
     }
+#endif
 }
 
 // Matrix-vector multiplication

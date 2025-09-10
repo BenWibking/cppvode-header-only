@@ -19,6 +19,29 @@ target_include_directories(integrators INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
+# Optional: use system LAPACK for linear solves (improves numerical parity with DVODE)
+option(INTEGRATORS_USE_LAPACK "Use LAPACK (dgetrf/dgetrs) for LU/solve" ON)
+if(INTEGRATORS_USE_LAPACK)
+    find_package(LAPACK)
+    if(LAPACK_FOUND)
+        target_compile_definitions(integrators INTERFACE INTEGRATORS_USE_LAPACK)
+        if(TARGET LAPACK::LAPACK)
+            target_link_libraries(integrators INTERFACE LAPACK::LAPACK)
+        else()
+            # Fallback: link to LAPACK/BLAS variables if provided
+            if(LAPACK_LIBRARIES)
+                target_link_libraries(integrators INTERFACE ${LAPACK_LIBRARIES})
+            endif()
+            if(BLAS_LIBRARIES)
+                target_link_libraries(integrators INTERFACE ${BLAS_LIBRARIES})
+            endif()
+        endif()
+        message(STATUS "Integrators: using LAPACK for LU/solve")
+    else()
+        message(STATUS "Integrators: LAPACK not found; using built-in LU/solve")
+    endif()
+endif()
+
 # Optional verbose debug logging for VODE internals
 # Enable with: -DINTEGRATORS_VODE_DEBUG=ON
 option(INTEGRATORS_VODE_DEBUG "Enable verbose VODE debug logging" OFF)

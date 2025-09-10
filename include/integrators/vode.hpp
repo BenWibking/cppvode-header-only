@@ -228,11 +228,14 @@ private:
                 VODE_DBG("J row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
             }
         }
-        for (size_type i = 0; i < N; ++i) {
-            for (size_type j = 0; j < N; ++j) {
+        // Mirror DVODE arithmetic: scale entire matrix by con, then add identity
+        for (size_type j = 0; j < N; ++j) {
+            for (size_type i = 0; i < N; ++i) {
                 s.jacobian[i][j] *= con;
-                if (i == j) s.jacobian[i][j] += 1.0;
             }
+        }
+        for (size_type i = 0; i < N; ++i) {
+            s.jacobian[i][i] += 1.0;
         }
         if (s.n_step == 1 && !s.debug_dump_done) {
             VODE_DBG("DUMP P (C++):");
@@ -539,6 +542,8 @@ private:
                     for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) += s.EL(j) * s.acor[static_cast<size_type>(i-1)];
                 }
                 s.NQWAIT -= 1;
+                VODE_DBG("ACCEPT_POST_PRE NQWAIT=" << int(s.NQWAIT) << " L=" << int(s.L)
+                    << " TQ5=" << s.TQ(5) << " (pre-CONP update)");
                 bool saved_lmax = false;
                 if ((s.L != VODE_LMAX) && (s.NQWAIT == 1)) {
                     for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), VODE_LMAX) = s.acor[static_cast<size_type>(i-1)];
