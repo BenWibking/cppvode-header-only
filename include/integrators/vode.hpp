@@ -192,8 +192,10 @@ private:
         // Build Jacobian J
         if (s.jacobian_analytic) {
             if (s.n_step == 1 && !s.debug_dump_done) {
-                VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
-                VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
+                if constexpr (N >= 3) {
+                    VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
+                    VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
+                }
             }
             jacobian(s.tn, s.y, s.jacobian);
         } else {
@@ -223,9 +225,11 @@ private:
         const Real hrl1 = s.H * s.RL1;
         const Real con = -hrl1;
         if (s.n_step == 1 && !s.debug_dump_done) {
-            VODE_DBG("DUMP J (C++):");
-            for (size_type i = 0; i < N; ++i) {
-                VODE_DBG("J row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            if constexpr (N >= 3) {
+                VODE_DBG("DUMP J (C++):");
+                for (size_type i = 0; i < N; ++i) {
+                    VODE_DBG("J row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+                }
             }
         }
         // Mirror DVODE arithmetic: scale entire matrix by con, then add identity
@@ -238,17 +242,21 @@ private:
             s.jacobian[i][i] += 1.0;
         }
         if (s.n_step == 1 && !s.debug_dump_done) {
-            VODE_DBG("DUMP P (C++):");
-            for (size_type i = 0; i < N; ++i) {
-                VODE_DBG("P row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            if constexpr (N >= 3) {
+                VODE_DBG("DUMP P (C++):");
+                for (size_type i = 0; i < N; ++i) {
+                    VODE_DBG("P row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+                }
             }
         }
         int ier = linalg::lu_decomposition<N, true>(s.jacobian, s.pivot);
         s.JCUR = 1;
         if (s.n_step == 1 && !s.debug_dump_done) {
-            VODE_DBG("DUMP LU (C++), ipvt=" << s.pivot[0] << "," << s.pivot[1] << "," << s.pivot[2]);
-            for (size_type i = 0; i < N; ++i) {
-                VODE_DBG("LU row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+            if constexpr (N >= 3) {
+                VODE_DBG("DUMP LU (C++), ipvt=" << s.pivot[0] << "," << s.pivot[1] << "," << s.pivot[2]);
+                for (size_type i = 0; i < N; ++i) {
+                    VODE_DBG("LU row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
+                }
             }
         }
         if (ier != 0) {
@@ -297,8 +305,10 @@ private:
             std::array<Real, N> rhs_c{};
             for (size_type i = 0; i < N; ++i) rhs_c[i] = (s.RL1 * s.H) * s.savf[i] - (s.RL1 * s.YH(static_cast<int>(i+1), 2) + s.acor[i]);
             if (s.n_step == 1 && !s.debug_dump_done) {
-                VODE_DBG("DUMP PRED YH2 (C++): " << s.YH(1,2) << ", " << s.YH(2,2) << ", " << s.YH(3,2));
-                VODE_DBG("DUMP SAVF (C++): " << s.savf[0] << ", " << s.savf[1] << ", " << s.savf[2]);
+                if constexpr (N >= 3) {
+                    VODE_DBG("DUMP PRED YH2 (C++): " << s.YH(1,2) << ", " << s.YH(2,2) << ", " << s.YH(3,2));
+                    VODE_DBG("DUMP SAVF (C++): " << s.savf[0] << ", " << s.savf[1] << ", " << s.savf[2]);
+                }
             }
             // Instrument: norm of RHS before solve
             {
@@ -315,8 +325,10 @@ private:
                 for (size_type i = 0; i < N; ++i) delta[i] *= CSCALE;
             }
             if (s.n_step == 1 && !s.debug_dump_done) {
-                VODE_DBG("DUMP RHS (C++): " << rhs_c[0] << ", " << rhs_c[1] << ", " << rhs_c[2]);
-                VODE_DBG("DUMP SOL (C++): " << delta[0] << ", " << delta[1] << ", " << delta[2]);
+                if constexpr (N >= 3) {
+                    VODE_DBG("DUMP RHS (C++): " << rhs_c[0] << ", " << rhs_c[1] << ", " << rhs_c[2]);
+                    VODE_DBG("DUMP SOL (C++): " << delta[0] << ", " << delta[1] << ", " << delta[2]);
+                }
             }
 
             // Compute norm of correction
@@ -530,9 +542,11 @@ private:
             // Error test
             const Real DSM = ACNRM / s.TQ(2);
             if (s.n_step == 1) {
-                VODE_DBG("ACCEPT_DEBUG ACOR=" << s.acor[0] << "," << s.acor[1] << "," << s.acor[2]
-                         << " TQ2=" << s.TQ(2) << " DSM=" << DSM << " RC=" << s.RC << " CRATE=" << s.CRATE
-                         << " NQWAIT=" << int(s.NQWAIT));
+                if constexpr (N >= 3) {
+                    VODE_DBG("ACCEPT_DEBUG ACOR=" << s.acor[0] << "," << s.acor[1] << "," << s.acor[2]
+                             << " TQ2=" << s.TQ(2) << " DSM=" << DSM << " RC=" << s.RC << " CRATE=" << s.CRATE
+                             << " NQWAIT=" << int(s.NQWAIT));
+                }
             }
             VODE_DBG("POST ACNRM=" << ACNRM << " DSM=" << DSM << " tq2=" << s.TQ(2)
                 << " JCUR=" << int(s.JCUR) << " ICF=" << int(s.ICF) << " CRATE=" << s.CRATE << " RC=" << s.RC);
