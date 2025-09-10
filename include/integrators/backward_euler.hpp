@@ -35,7 +35,7 @@ private:
         std::array<Real, N> rhs_val{};
         
         // Initial explicit predictor step
-        Problem::rhs(state.t, problem_state, rhs_val);
+        Problem::rhs(state.t, state.y, rhs_val);
         state.n_rhs++;
         
         for (size_type i = 0; i < N; ++i) {
@@ -46,12 +46,12 @@ private:
         bool converged = false;
         for (int iter = 0; iter < state.max_iter; ++iter) {
             // Evaluate RHS at current state
-            Problem::rhs(state.t + dt, problem_state, rhs_val);
+            Problem::rhs(state.t + dt, state.y, rhs_val);
             state.n_rhs++;
             
             // Get Jacobian
             if (state.jacobian_analytic) {
-                Problem::jacobian(state.t + dt, problem_state, state.jacobian);
+                Problem::jacobian(state.t + dt, state.y, state.jacobian);
             } else {
                 numerical_jacobian(problem_state, state, dt);
             }
@@ -114,14 +114,14 @@ private:
         std::array<Real, N> y_save = state.y;
         
         // Base RHS evaluation
-        Problem::rhs(state.t + dt, problem_state, rhs_base);
+        Problem::rhs(state.t + dt, state.y, rhs_base);
         
         // Compute finite difference approximation
         for (size_type j = 0; j < N; ++j) {
             Real h = std::sqrt(math::UROUND) * std::max(std::abs(state.y[j]), 1.0);
             state.y[j] += h;
             
-            Problem::rhs(state.t + dt, problem_state, rhs_pert);
+            Problem::rhs(state.t + dt, state.y, rhs_pert);
             
             for (size_type i = 0; i < N; ++i) {
                 state.jacobian[i][j] = (rhs_pert[i] - rhs_base[i]) / h;

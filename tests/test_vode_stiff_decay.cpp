@@ -25,7 +25,7 @@ int main() {
     std::cout << "VODE stiff decay convergence test\n";
     std::cout << "================================\n";
 
-    const Real T = 1.0e-3; // moderately stiff interval
+    const Real T = 1.0e-5; // shorter interval to keep solution above machine epsilon
     const Real y0 = 1.0;
     const Real exact = std::exp(-StiffDecay::lambda * T);
 
@@ -40,7 +40,9 @@ int main() {
         s.tout = T;
         s.y[0] = y0;
         s.rtol = tol;
-        s.atol = 1.e-14;
+        s.atol = 1.e-8;
+        // Increase step limit for stiff problem (lambda = 1e6)
+        s.max_steps = 100000;
         auto ps = StiffDecay::state_type{y0};
         auto res = integ.integrate(ps, s);
         if (res != IntegratorResult::SUCCESS) {

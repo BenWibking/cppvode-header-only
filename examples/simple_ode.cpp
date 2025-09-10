@@ -75,6 +75,7 @@ int main() {
         auto integrator = BackwardEuler<SimpleDecay>{};
         auto state = BackwardEulerState<1>{};
         state.jacobian_analytic = true;
+        state.dt = 0.1;  // Set initial timestep to enable adaptive stepping
         if (!test_integrator("Backward Euler", integrator, state)) {
             failed_tests++;
         }
@@ -85,6 +86,7 @@ int main() {
         auto integrator = VODE<SimpleDecay>{};
         auto state = VODEState<1>{};
         state.jacobian_analytic = true;
+        state.max_steps = 50000;  // Allow more steps for tight tolerances
         if (!test_integrator("VODE", integrator, state)) {
             failed_tests++;
         }

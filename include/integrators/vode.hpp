@@ -61,6 +61,9 @@ struct VODEState : public IntegratorState<N> {
     short NQWAIT{2};
     int NSLJ{0};
     int NSLP{0};
+    
+    // Integration limits
+    int max_steps{1000};
 
     // Coefficients and arrays (1-based in algorithm; we map i->i-1)
     std::array<Real, VODE_LMAX> el{};   // 1..L
@@ -689,7 +692,6 @@ private:
 
 public:
     IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
-        const int max_steps = 1000;
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
         // Initialize
@@ -716,7 +718,7 @@ public:
         bool skip_loop_start = true;
         while (true) {
             if (!skip_loop_start) {
-                if (s.n_step >= max_steps) {
+                if (s.n_step >= s.max_steps) {
                     // too many steps
                     for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
                     s.t = s.tn; return IntegratorResult::TOO_MANY_STEPS;
