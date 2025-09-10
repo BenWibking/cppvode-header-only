@@ -82,25 +82,15 @@ int main() {
     std::cout << "Integration interval: [0, 40]\n";
     std::cout << "Initial conditions: y1=1, y2=0, y3=0\n\n";
     
-    // Test Backward Euler - good for stiff problems
-    {
-        auto integrator = BackwardEuler<Robertson>{};
-        auto state = BackwardEulerState<3>{};
-        state.jacobian_analytic = true;
-        state.max_iter = 10;
-        test_robertson("Backward Euler", integrator, state);
-    }
-    
     // Test VODE - should handle stiffness well
     {
         auto integrator = VODE<Robertson>{};
         auto state = VODEState<3>{};
         state.jacobian_analytic = true;
+        // Integrate to 40 to collect many steps with VODE
+        state.tout = 40.0;
         test_robertson("VODE", integrator, state);
     }
-    
-    // Note: RKC may struggle with this stiff problem without very small tolerances
-    std::cout << "Note: RKC is explicit and may require very small tolerances for this stiff problem\n";
     
     return 0;
 }

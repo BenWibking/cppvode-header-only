@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.14)
 project(HeaderOnlyIntegrators 
     VERSION 1.0.0
     DESCRIPTION "Header-only ODE integrator library extracted from AMReX Microphysics"
-    LANGUAGES CXX)
+    LANGUAGES CXX Fortran)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
