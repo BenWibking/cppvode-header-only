@@ -452,24 +452,30 @@ private:
 
         // Save y before solve (not used for constraints here)
         while (true) {
-            // Apply any pending step-size/order change before each attempt.
-            // This ensures a revert scheduled after a rejection affects the very next retry.
+            // Apply any pending order and/or step-size change before each attempt.
+            // Order changes must apply even when ETA == 1 (no step-size change),
+            // to match DVODE behavior. Step-size scaling applies only when NEWH != 0.
             const int prev_NQ = s.NQ;
-            if (s.NEWH != 0) {
+            if (s.NEWH != 0 || s.NEWQ != s.NQ) {
+                // Apply order change first if requested
                 if (s.NEWQ < s.NQ) { dvjust(-1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
                 else if (s.NEWQ > s.NQ) { dvjust(1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
-                // Rescale Nordsieck history by powers of ETA (Pascal transform)
-                Real Rpre = 1.0;
-                for (int j = 2; j <= s.L; ++j) {
-                    Rpre *= s.ETA;
-                    for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= Rpre;
+
+                // Apply step-size change if scheduled
+                if (s.NEWH != 0) {
+                    // Rescale Nordsieck history by powers of ETA (Pascal transform)
+                    Real Rpre = 1.0;
+                    for (int j = 2; j <= s.L; ++j) {
+                        Rpre *= s.ETA;
+                        for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= Rpre;
+                    }
+                    // Apply the step-size change
+                    s.H = s.H * s.ETA;
+                    s.HSCAL = s.H;
+                    s.RC *= s.ETA;
+                    s.NEWH = 0; // consumed
                 }
-                // Apply the step-size change
-                s.H = s.H * s.ETA;
-                s.HSCAL = s.H;
-                s.RC *= s.ETA;
                 raised_this_step = (s.NQ > prev_NQ);
-                s.NEWH = 0; // consumed
             } else {
                 raised_this_step = false;
             }
@@ -660,8 +666,11 @@ private:
             s.NEWH = 1; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2;
             const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; return 0;
         }
+        // Keep selected NEWQ (if different from NQ) but do not change step size (ETA -> 1).
         VODE_DBG("ORDER_APPLY ETA=" << s.ETA << " NEWQ=" << int(s.NEWQ) << " THRESH=" << THRESH << " ETAMAX=" << s.ETAMAX);
-        s.NEWQ = s.NQ; s.NEWH = 0; s.ETA = 1.0; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2; const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; return 0;
+        s.NEWH = 0; s.ETA = 1.0; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2;
+        { const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; }
+        return 0;
     }
 
 public:
