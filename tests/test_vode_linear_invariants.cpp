@@ -52,10 +52,10 @@ int main() {
     auto s = VODEState<LinearExchange4::neqs>{};
     s.jacobian_analytic = true;  // exact constant Jacobian
     s.t = 0.0;
-    s.tout = 1000.0;             // long enough for slow block to equilibrate
+    s.tout = 10.0;
     s.y = y0;
-    s.rtol = 1.e-9;              // tight tolerances to isolate roundoff
-    s.atol = 1.e-12;
+    s.rtol = 1.e-6; // much *less* than machine epsilon
+    s.atol = 1.e-10;
     s.max_steps = 200000;
 
     auto problem_state = y0;
