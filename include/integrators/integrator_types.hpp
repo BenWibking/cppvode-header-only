@@ -60,21 +60,31 @@ struct IntegratorState {
     bool debug_dump_done{false};
 };
 
+// RHS/Jacobian concepts (available when compiling with C++20 concepts support).
+// Some CUDA toolchains in CI may not expose CUDA20 to CMake; guard for portability.
+#if defined(__cpp_concepts) && __cpp_concepts >= 201907L
 // RHS function interface
 template<typename Problem>
-concept RHSFunction = requires(const typename Problem::state_type& state, 
-                              typename Problem::rhs_type& rhs, 
-                              Real t) {
+concept RHSFunction = requires(const typename Problem::state_type& state,
+                               typename Problem::rhs_type& rhs,
+                               Real t) {
     Problem::rhs(t, state, rhs);
 };
 
-// Jacobian function interface  
+// Jacobian function interface
 template<typename Problem>
 concept JacobianFunction = requires(const typename Problem::state_type& state,
-                                   typename Problem::jacobian_type& jac,
-                                   Real t) {
+                                    typename Problem::jacobian_type& jac,
+                                    Real t) {
     Problem::jacobian(t, state, jac);
 };
+#else
+// Fallback placeholders when concepts are unavailable; not used in the library code paths.
+template<typename Problem>
+using RHSFunction = int;
+template<typename Problem>
+using JacobianFunction = int;
+#endif
 
 // Math utilities
 namespace math {
