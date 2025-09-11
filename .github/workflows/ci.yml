@@ -35,6 +35,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ccache
 
+      - name: Install GCC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install gcc
+          # Expose the gfortran binary path (version-suffixed on Homebrew)
+          GFORTRAN_BIN=$(ls "$(brew --prefix)/bin"/gfortran-* | head -n1)
+          echo "GFORTRAN=${GFORTRAN_BIN}" >> "$GITHUB_ENV"
+
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -66,7 +74,8 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_Fortran_COMPILER=${{ env.GFORTRAN }}
 
       - name: Build
         run: |
@@ -83,6 +92,7 @@ jobs:
         run: |
           clang --version
           clang++ --version
+          if [ -n "${GFORTRAN}" ] && [ -x "${GFORTRAN}" ]; then ${GFORTRAN} --version; fi
 
       - name: ccache stats
         run: ccache -s || true
