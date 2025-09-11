@@ -52,6 +52,11 @@ if(CMAKE_CUDA_COMPILER)
     # Enable extended device lambda support for NVCC
     target_compile_options(test_vode_gpu PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda --expt-relaxed-constexpr>)
+
+    # Silence Clang host warnings about GNU-style line markers produced by NVCC
+    # Only apply when compiling CUDA with a Clang host to avoid breaking GCC/MSVC.
+    target_compile_options(test_vode_gpu PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:Clang>>:-Xcompiler=-Wno-gnu-line-marker>)
     target_link_libraries(test_vode_gpu PRIVATE integrators)
     add_test(NAME vode_gpu_test COMMAND test_vode_gpu)
     # Mark as GPU test so CI can identify/skip running if no GPU is present
