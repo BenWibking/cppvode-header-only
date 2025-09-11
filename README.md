@@ -11,7 +11,6 @@ A modern C++20 header-only library containing ODE integrators extracted from the
 - **Modern C++20**: Uses standard library containers and modern C++ features including concepts
 - **Self-contained**: No external dependencies beyond standard library
 - **Template-based**: Generic interfaces supporting different problem types
-- **Extracted from production code**: Based on battle-tested AMReX Microphysics integrators
 
 ## Quick Start
 
@@ -62,22 +61,6 @@ make -j
 ./tests/test_convergence
 ```
 
-## Integrator Selection Guide
-
-### VODE (Recommended for most problems)
-- **Best for**: General-purpose, stiff and non-stiff problems
-- **Method**: Variable-order BDF with adaptive timestepping
-- **Pros**: High accuracy, robust error control, efficient for stiff systems
-- **Cons**: Most complex implementation
-
-### Backward Euler
-- **Best for**: Very stiff problems, simple implementation needs
-- **Method**: First-order implicit method
-- **Pros**: Unconditionally stable, simple, reliable for stiff problems  
-- **Cons**: Only first-order accurate
-
- 
-
 ## Problem Interface Requirements
 
 Your problem struct must provide:
@@ -115,18 +98,10 @@ tests/                 # Unit tests
 └── test_convergence.cpp     # Convergence order tests
 ```
 
-## Installation
-
-As a header-only library, you can either:
-
-1. **Copy headers**: Copy the `include/integrators/` directory to your project
-2. **CMake install**: Use `make install` to install system-wide
-3. **Package managers**: Add as git submodule or use with package managers
-
 ## Credits
 
 This library is extracted and adapted from the [AMReX Microphysics](https://github.com/AMReX-Astro/Microphysics) framework, which provides physics modules for astrophysical simulations. The original integrators were developed for stellar evolution and explosive astrophysics applications.
 
 ## License
 
-This library maintains compatibility with the original AMReX license terms.
+This library is licensed under the 3-clause BSD license.
