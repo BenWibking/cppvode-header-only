@@ -13,6 +13,9 @@ check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
+    # Suppress host compiler pedantic warnings when compiling CUDA sources
+    # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
+    add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
 endif()
 
 # Set C++ standard
