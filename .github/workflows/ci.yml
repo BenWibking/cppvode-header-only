@@ -100,3 +100,39 @@ jobs:
       - name: Run tests (ctest)
         run: |
           ctest --test-dir build --output-on-failure -C ${{ matrix.build_type }}
+
+  cuda-build:
+    name: CUDA build (Ubuntu)
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:13.0.1-devel-ubuntu22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ gfortran cmake ccache git
+          nvcc --version
+
+      - name: Configure (enable CUDA)
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES=90 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build CUDA target
+        run: cmake --build build --target test_vode_gpu --parallel
+
+      - name: List built tests
+        run: ctest --test-dir build -N || true
+
+      - name: Run tests (skip GPU runtime)
+        run: |
+          # Exclude GPU-labeled tests since the runner lacks a GPU device
+          ctest --test-dir build --output-on-failure -E "vode_gpu_test"

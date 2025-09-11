@@ -7,6 +7,14 @@ project(HeaderOnlyIntegrators
     DESCRIPTION "Header-only ODE integrator library extracted from AMReX Microphysics"
     LANGUAGES CXX Fortran)
 
+# Optionally enable CUDA if a compiler is available (for GPU tests)
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    message(STATUS "CUDA compiler detected: enabling CUDA language")
+endif()
+
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
