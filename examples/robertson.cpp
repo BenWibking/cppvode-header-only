@@ -16,7 +16,7 @@ struct Robertson {
     using rhs_type = std::array<integrators::Real, neqs>;
     using jacobian_type = std::array<std::array<integrators::Real, neqs>, neqs>;
     
-    static void rhs(integrators::Real t, const state_type& y, rhs_type& dydt) {
+    static void rhs([[maybe_unused]] integrators::Real t, const state_type& y, rhs_type& dydt) {
         constexpr integrators::Real k1 = 0.04;
         constexpr integrators::Real k2 = 1.0e4;  
         constexpr integrators::Real k3 = 3.0e7;
@@ -26,7 +26,7 @@ struct Robertson {
         dydt[2] = k3 * y[1] * y[1];
     }
     
-    static void jacobian(integrators::Real t, const state_type& y, jacobian_type& jac) {
+    static void jacobian([[maybe_unused]] integrators::Real t, const state_type& y, jacobian_type& jac) {
         constexpr integrators::Real k1 = 0.04;
         constexpr integrators::Real k2 = 1.0e4;
         constexpr integrators::Real k3 = 3.0e7;

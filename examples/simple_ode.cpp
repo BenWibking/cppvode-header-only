@@ -14,12 +14,12 @@ struct SimpleDecay {
     using jacobian_type = std::array<std::array<integrators::Real, neqs>, neqs>;
     
     // RHS: dy/dt = -y
-    static void rhs(integrators::Real t, const state_type& state, rhs_type& dydt) {
+    static void rhs([[maybe_unused]] integrators::Real t, const state_type& state, rhs_type& dydt) {
         dydt[0] = -state[0];
     }
     
     // Jacobian: J = -1
-    static void jacobian(integrators::Real t, const state_type& state, jacobian_type& jac) {
+    static void jacobian([[maybe_unused]] integrators::Real t, [[maybe_unused]] const state_type& state, jacobian_type& jac) {
         jac[0][0] = -1.0;
     }
 };

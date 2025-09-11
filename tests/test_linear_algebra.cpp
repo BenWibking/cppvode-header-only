@@ -20,8 +20,8 @@ void test_lu_decomposition() {
     
     std::array<int, 3> pivot;
     int info = linalg::lu_decomposition<3, true>(A, pivot);
-    
     assert(info == 0);
+    (void)info; // ensure used in Release builds
     std::cout << "  LU decomposition: PASSED\n";
 }
 
@@ -39,6 +39,7 @@ void test_matrix_solve() {
     
     int info = linalg::lu_decomposition<2, true>(A, pivot);
     assert(info == 0);
+    (void)info; // ensure used in Release builds
     
     linalg::lu_solve<2, true>(A, pivot, b);
     
@@ -46,6 +47,7 @@ void test_matrix_solve() {
     Real tol = 1.e-12;
     assert(std::abs(b[0] - 1.0) < tol);
     assert(std::abs(b[1] - 1.0) < tol);
+    (void)tol; // silence unused when NDEBUG
     
     std::cout << "  Matrix solve: PASSED\n";
 }
@@ -58,9 +60,11 @@ void test_vector_norms() {
     Real norm2 = linalg::norm2(v);
     Real expected_norm2 = std::sqrt((9.0 + 16.0) / 3.0); // RMS norm
     assert(std::abs(norm2 - expected_norm2) < 1.e-12);
+    (void)norm2; (void)expected_norm2;
     
     Real norm_inf = linalg::norm_inf(v);
     assert(std::abs(norm_inf - 4.0) < 1.e-12);
+    (void)norm_inf;
     
     std::cout << "  Vector norms: PASSED\n";
 }

@@ -109,7 +109,7 @@ private:
         return IntegratorResult::SUCCESS;
     }
     
-    void numerical_jacobian(ProblemState& problem_state, State& state, Real dt) {
+    void numerical_jacobian([[maybe_unused]] ProblemState& problem_state, State& state, Real dt) {
         std::array<Real, N> rhs_base{}, rhs_pert{};
         std::array<Real, N> y_save = state.y;
         

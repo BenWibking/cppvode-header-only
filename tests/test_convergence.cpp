@@ -16,11 +16,11 @@ struct ExponentialGrowth {
     using rhs_type = std::array<Real, neqs>;
     using jacobian_type = std::array<std::array<Real, neqs>, neqs>;
     
-    static void rhs(Real t, const state_type& y, rhs_type& dydt) {
+    static void rhs([[maybe_unused]] Real t, const state_type& y, rhs_type& dydt) {
         dydt[0] = y[0];
     }
     
-    static void jacobian(Real t, const state_type& y, jacobian_type& jac) {
+    static void jacobian([[maybe_unused]] Real t, [[maybe_unused]] const state_type& y, jacobian_type& jac) {
         jac[0][0] = 1.0;
     }
 };

@@ -454,7 +454,7 @@ private:
         constexpr Real BIAS3 = 10.0;
         constexpr Real ETACF = 0.25;
         constexpr Real ETAMIN = 0.1;
-        constexpr Real ETAMXF = 0.2;
+        [[maybe_unused]] constexpr Real ETAMXF = 0.2;
         constexpr Real ETAMX2 = 10.0;
         constexpr Real ETAMX3 = 10.0;
         constexpr Real ONEPSM = 1.00001;
@@ -567,7 +567,7 @@ private:
                 s.NQWAIT -= 1;
                 VODE_DBG("ACCEPT_POST_PRE NQWAIT=" << int(s.NQWAIT) << " L=" << int(s.L)
                     << " TQ5=" << s.TQ(5) << " (pre-CONP update)");
-                bool saved_lmax = false;
+                [[maybe_unused]] bool saved_lmax = false;
                 if ((s.L != VODE_LMAX) && (s.NQWAIT == 1)) {
                     for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), VODE_LMAX) = s.acor[static_cast<size_type>(i-1)];
                     s.CONP = s.TQ(5);
