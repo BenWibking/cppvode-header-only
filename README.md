@@ -65,6 +65,7 @@ build/examples/robertson
 Useful options:
 - `-DBUILD_TESTS=ON` and `-DBUILD_EXAMPLES=ON` (both ON by default)
 - `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE internal logs
+- `-DWARNINGS_AS_ERRORS=ON` to treat C/C++ warnings as errors (matches CI; excludes CUDA/Fortran)
 - Debug builds enable AddressSanitizer: `-DCMAKE_BUILD_TYPE=Debug`
 
 ## Development Tips

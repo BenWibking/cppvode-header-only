@@ -39,17 +39,31 @@ if(INTEGRATORS_VODE_DEBUG)
     target_compile_definitions(integrators INTERFACE VODE_DEBUG)
 endif()
 
+# Treat warnings as errors (opt-in, excludes CUDA/Fortran)
+option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortran)" OFF)
+
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(integrators INTERFACE
         -Wall -Wextra -Wpedantic -O3
         $<$<CONFIG:Debug>:-g -O0 -fsanitize=address>
     )
+    if(WARNINGS_AS_ERRORS)
+        target_compile_options(integrators INTERFACE
+            $<$<COMPILE_LANGUAGE:C>:-Werror>
+            $<$<COMPILE_LANGUAGE:CXX>:-Werror>
+        )
+    endif()
     target_link_options(integrators INTERFACE
         $<$<CONFIG:Debug>:-fsanitize=address>
     )
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     target_compile_options(integrators INTERFACE /W4 /O2)
+    if(WARNINGS_AS_ERRORS)
+        target_compile_options(integrators INTERFACE
+            $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/WX>
+        )
+    endif()
 endif()
 
 # Enable testing
