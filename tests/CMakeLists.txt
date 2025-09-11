@@ -24,6 +24,16 @@ add_executable(test_vode_nelson test_vode_nelson.cpp)
 target_link_libraries(test_vode_nelson PRIVATE integrators)
 add_test(NAME vode_nelson_test COMMAND test_vode_nelson)
 
+# Linear invariants conservation with VODE
+add_executable(test_vode_linear_invariants test_vode_linear_invariants.cpp)
+target_link_libraries(test_vode_linear_invariants PRIVATE integrators)
+add_test(NAME vode_linear_invariants_test COMMAND test_vode_linear_invariants)
+
+# Numerical Jacobian variant
+add_executable(test_vode_linear_invariants_numjac test_vode_linear_invariants_numjac.cpp)
+target_link_libraries(test_vode_linear_invariants_numjac PRIVATE integrators)
+add_test(NAME vode_linear_invariants_numjac_test COMMAND test_vode_linear_invariants_numjac)
+
 # GPU test (requires CUDA)
 if(CMAKE_CUDA_COMPILER)
     add_executable(test_vode_gpu test_vode_gpu.cu)
