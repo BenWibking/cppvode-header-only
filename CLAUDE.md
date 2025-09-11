@@ -9,7 +9,7 @@ This is a modern C++20 header-only library containing ODE integrators extracted 
 - **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF) - recommended for most problems
 - **Backward Euler**: Simple implicit first-order method for very stiff problems
 
-The library is completely self-contained with no external dependencies beyond the standard library (optional LAPACK integration available for improved numerical performance).
+The library is completely self-contained with no external dependencies beyond the standard library.
 
 ## Essential Commands
 
@@ -34,9 +34,6 @@ ctest
 
 ### CMake Configuration Options
 ```bash
-# Enable LAPACK for improved numerical accuracy
-cmake .. -DINTEGRATORS_USE_LAPACK=ON
-
 # Enable verbose VODE debugging
 cmake .. -DINTEGRATORS_VODE_DEBUG=ON
 
@@ -102,11 +99,8 @@ The library extensively uses:
 
 ## Key Integration Points
 
-### LAPACK Integration
-When `INTEGRATORS_USE_LAPACK=ON` is enabled:
-- Uses `dgetrf`/`dgetrs` for LU decomposition and solving
-- Provides exact numerical compatibility with original DVODE Fortran code
-- Falls back to built-in implementations when LAPACK unavailable
+### Linear Algebra
+Built-in LU decomposition and solve routines are used (no external LAPACK dependency).
 
 ### VODE Debugging
 Enable with `INTEGRATORS_VODE_DEBUG=ON` for verbose logging of:
@@ -148,6 +142,6 @@ Uses CTest framework with automatic test discovery. All tests must pass for succ
 ## Performance Considerations
 
 - Built-in linear algebra uses partial pivoting LU decomposition
-- LAPACK integration available for maximum performance on large systems
+-- Built-in linear algebra optimized for small to medium systems
 - Template specialization eliminates runtime overhead
 - Compile with `-O3` for production builds (handled automatically by CMake)

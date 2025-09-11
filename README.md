@@ -71,7 +71,7 @@ Useful options:
 
 - Compiler selection: pass `-DCMAKE_CXX_COMPILER=/path/to/clang++` (or `g++`) to `cmake` or set `CXX` in the environment.
 - CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). The CUDA test target `test_vode_gpu` builds only when CUDA is available.
-- LAPACK usage: system LAPACK is used when found (default `-DINTEGRATORS_USE_LAPACK=ON`); disable with `-DINTEGRATORS_USE_LAPACK=OFF` to use the built-in LU/solve.
+- LAPACK support removed: the library always uses the built-in LU/solve.
 - Reproducibility: record `-DCMAKE_CXX_COMPILER` and `-DCMAKE_BUILD_TYPE` with results. Use `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE traces in Debug builds.
 
 ## Problem Interface Requirements
