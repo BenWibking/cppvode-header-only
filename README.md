@@ -1,4 +1,4 @@
-# Header-Only ODE Integrator Library
+# cppvode-header-only
 
 A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides two robust integrators suitable for scientific computing applications:
 
