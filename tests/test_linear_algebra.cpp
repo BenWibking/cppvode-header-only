@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Unit tests for linear algebra utilities
 // ABOUTME: Tests LU decomposition, matrix solve, and vector operations
+#include <algorithm>
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -184,6 +185,60 @@ void test_gth_generator() {
     std::cout << "  GTH generator: PASSED\n";
 }
 
+void test_gth_near_singular() {
+    std::cout << "Testing GTH factorization on near-singular stochastic matrix...\n";
+
+    constexpr Real eps = 1.0e-12;
+    std::array<std::array<Real, 3>, 3> P = {{
+        {{1.0 - eps, eps, 0.0}},
+        {{0.5, 0.5, 0.0}},
+        {{0.5, 0.5, 0.0}}
+    }};
+
+    std::array<std::array<Real, 3>, 3> Pfact = P;
+    std::array<Real, 3> inv_piv{};
+    int info = linalg::gth_factorization<3>(Pfact, inv_piv, linalg::GthMatrixKind::RowStochastic);
+    assert(info == 0);
+    (void)info;
+
+    std::array<Real, 3> pi{};
+    info = linalg::gth_solve<3>(Pfact, inv_piv, pi, 1.0, linalg::GthMatrixKind::RowStochastic);
+    assert(info == 0);
+    (void)info;
+
+    const std::array<Real, 3> expected = {
+        1.0 / (1.0 + 2.0 * eps),
+        2.0 * eps / (1.0 + 2.0 * eps),
+        0.0
+    };
+
+    Real diff_max = 0.0;
+    for (size_type i = 0; i < 3; ++i) {
+        diff_max = std::max(diff_max, std::abs(pi[i] - expected[i]));
+    }
+    const Real tol = 1.e-13;
+    assert(diff_max < tol);
+    (void)tol;
+
+    // Reference via LU (tends to introduce small negative population).
+    std::array<std::array<Real, 3>, 3> A = {{
+        {{P[0][0] - 1.0, P[1][0], P[2][0]}},
+        {{P[0][1], P[1][1] - 1.0, P[2][1]}},
+        {{1.0, 1.0, 1.0}}
+    }};
+    std::array<Real, 3> b = {0.0, 0.0, 1.0};
+    std::array<int, 3> piv{};
+    info = linalg::lu_decomposition<3, true>(A, piv);
+    assert(info == 0);
+    linalg::lu_solve<3, true>(A, piv, b);
+
+    assert(b[2] < 0.0); // LU introduces a small negative tail
+    assert(std::abs(b[2]) < 1.0e-14);
+
+    std::cout << "  GTH near-singular: max|π-expected| = " << diff_max
+              << ", LU tail = " << b[2] << "\n";
+}
+
 int main() {
     std::cout << "Linear Algebra Test Suite\n";
     std::cout << "=========================\n\n";
@@ -194,6 +249,7 @@ int main() {
     test_matrix_vector();
     test_gth_row_stochastic();
     test_gth_generator();
+    test_gth_near_singular();
     
     std::cout << "\nAll linear algebra tests PASSED!\n";
     return 0;
