@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <numeric>
 #include "integrator_types.hpp"
 
 namespace integrators {
@@ -63,6 +64,86 @@ int lu_decomposition(std::array<std::array<Real, N>, N>& A,
     ipvt[N-1] = static_cast<int>(N-1);
     if (std::abs(A[N-1][N-1]) < math::UROUND) {
         return static_cast<int>(N);
+    }
+    return 0;
+}
+
+enum class GthMatrixKind {
+    RowStochastic,
+    Generator
+};
+
+// GTH factorization for stochastic/generator matrices.
+// Stores inverse pivots inv_piv[n] = 1 / sum_{k<n} A[n][k].
+// On success returns 0 and leaves A overwritten with censored coefficients.
+// On failure returns 1-based index of the row that produced a zero pivot.
+template<size_type N>
+int gth_factorization(std::array<std::array<Real, N>, N>& A,
+                      std::array<Real, N>& inv_piv,
+                      GthMatrixKind kind = GthMatrixKind::RowStochastic) {
+    static_cast<void>(kind);
+    inv_piv.fill(0.0);
+    if constexpr (N == 0) {
+        return 0;
+    }
+    const Real eps = math::UROUND;
+    for (size_type n = N; n-- > 0;) {
+        if (n == 0) {
+            break;
+        }
+        Real sum = 0.0;
+        for (size_type k = 0; k < n; ++k) {
+            sum += A[n][k];
+        }
+        if (std::abs(sum) <= eps) {
+            return static_cast<int>(n + 1);
+        }
+        const Real inv = 1.0 / sum;
+        inv_piv[n] = inv;
+        for (size_type i = 0; i < n; ++i) {
+            Real factor = A[i][n] * inv;
+            if (factor == 0.0) {
+                continue;
+            }
+            for (size_type j = 0; j < n; ++j) {
+                A[i][j] += factor * A[n][j];
+            }
+        }
+    }
+    inv_piv[0] = 1.0;
+    return 0;
+}
+
+// Solve for the stationary vector using GTH factors.
+// On success returns 0 and writes solution into x normalized so sum(x) == norm_target.
+// For generator matrices, norm_target represents the conserved total (e.g. abundance).
+// Returns N if normalization fails due to near-zero sum.
+template<size_type N>
+int gth_solve(const std::array<std::array<Real, N>, N>& A,
+              const std::array<Real, N>& inv_piv,
+              std::array<Real, N>& x,
+              Real norm_target = 1.0,
+              GthMatrixKind kind = GthMatrixKind::RowStochastic) {
+    static_cast<void>(kind);
+    x.fill(0.0);
+    if constexpr (N == 0) {
+        return 0;
+    }
+    x[0] = 1.0;
+    for (size_type j = 1; j < N; ++j) {
+        Real sum = 0.0;
+        for (size_type i = 0; i < j; ++i) {
+            sum += x[i] * A[i][j];
+        }
+        x[j] = inv_piv[j] * sum;
+    }
+    Real total = std::accumulate(x.begin(), x.end(), 0.0);
+    if (std::abs(total) <= math::UROUND) {
+        return static_cast<int>(N);
+    }
+    const Real scale = norm_target / total;
+    for (size_type j = 0; j < N; ++j) {
+        x[j] *= scale;
     }
     return 0;
 }

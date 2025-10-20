@@ -77,3 +77,6 @@ add_executable(test_dvodpk_robertson test_dvodpk_robertson.cpp)
 target_link_libraries(test_dvodpk_robertson PRIVATE integrators)
 add_test(NAME dvodpk_robertson_test COMMAND test_dvodpk_robertson)
 
+add_executable(test_gth_robertson test_gth_robertson.cpp)
+target_link_libraries(test_gth_robertson PRIVATE integrators)
+add_test(NAME gth_robertson_test COMMAND test_gth_robertson)
