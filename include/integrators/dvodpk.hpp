@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#define INTEGRATORS_DVODPK_DEBUG
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 
@@ -321,7 +320,7 @@ private:
                 ok = false;
                 state.ewt[i] = 1.0;
             } else {
-                state.ewt[i] = 1.0 / weight;
+                state.ewt[i] = weight;
             }
         }
         return ok;
@@ -783,17 +782,6 @@ private:
         const Real tq2 = std::max(state.TQ(2), math::UROUND);
         const Real dsm = error_norm / tq2;
         const Real flo = static_cast<Real>(state.l);
-
-        if (state.nqwait > 0) {
-            state.nqwait = static_cast<short>(std::max<int>(state.nqwait - 1, 0));
-        }
-
-        if (state.l != max_l && state.nqwait == 1) {
-            for (size_type i = 0; i < N; ++i) {
-                state.YH(static_cast<int>(i + 1), max_l) = state.acor[i];
-            }
-            state.conp = state.TQ(5);
-        }
 
         if (state.etamax == 1.0) {
             if (state.nqwait < 2) {

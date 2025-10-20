@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // ABOUTME: Robertson regression test for DVODPK integrator
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <integrators/integrators.hpp>
@@ -52,12 +53,20 @@ int main() {
     vode_state.jacobian_analytic = true;
     vode_state.max_steps = 20000;
     auto problem_state = Robertson::state_type{1.0, 0.0, 0.0};
+    const auto vode_start = std::chrono::steady_clock::now();
     const auto vode_result = vode.integrate(problem_state, vode_state);
+    const auto vode_end = std::chrono::steady_clock::now();
     if (vode_result != IntegratorResult::SUCCESS) {
         std::cerr << "VODE reference integration failed with code "
                   << static_cast<int>(vode_result) << "\n";
         return 1;
     }
+    const auto vode_elapsed =
+        std::chrono::duration<double>(vode_end - vode_start).count();
+    std::cout << "VODE Robertson integration time: " << vode_elapsed << " s\n";
+    std::cout << "VODE steps: " << vode_state.n_step
+              << " RHS evals: " << vode_state.n_rhs
+              << " Jacobians: " << vode_state.n_jac << "\n";
 
     const auto reference = vode_state.y;
 
@@ -67,7 +76,7 @@ int main() {
     dv_state.t = 0.0;
     dv_state.y = {1.0, 0.0, 0.0};
     dv_state.rtol = 1.0e-6;
-    dv_state.atol = 1.0e-12;
+    dv_state.atol = 1.0e-10;
     dv_state.max_steps = 200000;
 
     DVODPKConfig config;
@@ -78,12 +87,20 @@ int main() {
     config.h_min = 0.0;
     config.h_max = 0.0;
 
+    const auto dv_start = std::chrono::steady_clock::now();
     const auto dv_result = DVODPK<Robertson>::integrate(dv_state, problem, final_time, config);
+    const auto dv_end = std::chrono::steady_clock::now();
     if (dv_result != IntegratorResult::SUCCESS) {
         std::cerr << "DVODPK integration failed with code "
                   << static_cast<int>(dv_result) << "\n";
         return 1;
     }
+    const auto dv_elapsed =
+        std::chrono::duration<double>(dv_end - dv_start).count();
+    std::cout << "DVODPK Robertson integration time: " << dv_elapsed << " s\n";
+    std::cout << "DVODPK steps: " << dv_state.n_step
+              << " RHS evals: " << dv_state.n_rhs
+              << " GMRES iters: " << dv_state.n_linear_iters << "\n";
 
     const Real mass = dv_state.y[0] + dv_state.y[1] + dv_state.y[2];
     if (std::abs(mass - 1.0) >= 1.0e-6) {
@@ -111,18 +128,26 @@ int main() {
     vode_state_long.jacobian_analytic = true;
     vode_state_long.max_steps = 500000;
     auto problem_state_long = Robertson::state_type{1.0, 0.0, 0.0};
+    const auto vode_start_long = std::chrono::steady_clock::now();
     const auto vode_result_long = vode.integrate(problem_state_long, vode_state_long);
+    const auto vode_end_long = std::chrono::steady_clock::now();
     if (vode_result_long != IntegratorResult::SUCCESS) {
         std::cerr << "VODE long-horizon integration failed with code "
                   << static_cast<int>(vode_result_long) << "\n";
         return 1;
     }
+    const auto vode_elapsed_long =
+        std::chrono::duration<double>(vode_end_long - vode_start_long).count();
+    std::cout << "VODE Robertson long integration time: " << vode_elapsed_long << " s\n";
+    std::cout << "VODE long steps: " << vode_state_long.n_step
+              << " RHS evals: " << vode_state_long.n_rhs
+              << " Jacobians: " << vode_state_long.n_jac << "\n";
 
     DVODPK<Robertson>::State dv_state_long;
     dv_state_long.t = 0.0;
     dv_state_long.y = {1.0, 0.0, 0.0};
-    dv_state_long.rtol = 5.0e-6;
-    dv_state_long.atol = 1.0e-11;
+    dv_state_long.rtol = 1.0e-6;
+    dv_state_long.atol = 1.0e-10;
     dv_state_long.max_steps = 2000000;
 
     DVODPKConfig config_long = config;
@@ -130,12 +155,20 @@ int main() {
     config_long.max_krylov_iters = 15;
     config_long.max_nonlinear_iters = 6;
 
+    const auto dv_start_long = std::chrono::steady_clock::now();
     const auto dv_result_long = DVODPK<Robertson>::integrate(dv_state_long, problem, final_time_long, config_long);
+    const auto dv_end_long = std::chrono::steady_clock::now();
     if (dv_result_long != IntegratorResult::SUCCESS) {
         std::cerr << "DVODPK long-horizon integration failed with code "
                   << static_cast<int>(dv_result_long) << "\n";
         return 1;
     }
+    const auto dv_elapsed_long =
+        std::chrono::duration<double>(dv_end_long - dv_start_long).count();
+    std::cout << "DVODPK Robertson long integration time: " << dv_elapsed_long << " s\n";
+    std::cout << "DVODPK long steps: " << dv_state_long.n_step
+              << " RHS evals: " << dv_state_long.n_rhs
+              << " GMRES iters: " << dv_state_long.n_linear_iters << "\n";
 
     Real max_err_long = 0.0;
     for (size_type i = 0; i < Robertson::neqs; ++i) {
