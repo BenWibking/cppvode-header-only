@@ -48,6 +48,10 @@ This plan outlines how to introduce the Grassmann–Taksar–Heyman (GTH) factor
 - Benchmark GTH versus LU on representative matrix sizes to quantify overhead.
 - Audit numerical safeguards (thresholds, underflow/overflow checks) and ensure error codes propagate to callers.
 
+## 10. Diagnostics for Steady-State Detection
+- Add residual-based triggers so integrators can identify when the system is near steady state (`‖f(y)‖` below a tolerance) and hand the state to the GTH solver.
+- Supplement with detailed-balance checks by comparing forward/backward fluxes (or, for Markov formulations, verifying `π_i k_{ij} ≈ π_j k_{ji}`) to flag when the network is near thermodynamic equilibrium.
+
 ## 9. Rollout Plan
 - Gate the new solver behind an optional CMake switch (`-DINTEGRATORS_ENABLE_GTH=ON`) during initial testing.
 - Communicate migration guidance in `README.md`, highlighting when developers should opt into GTH and how to interpret its error codes.
