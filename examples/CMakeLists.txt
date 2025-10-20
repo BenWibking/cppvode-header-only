@@ -6,6 +6,9 @@ target_link_libraries(simple_ode PRIVATE integrators)
 add_executable(robertson robertson.cpp)
 target_link_libraries(robertson PRIVATE integrators)
 
+add_executable(gth_stationary gth_stationary.cpp)
+target_link_libraries(gth_stationary PRIVATE integrators)
+
 # Add examples as tests
 add_test(NAME simple_ode_test COMMAND simple_ode)
 add_test(NAME robertson_test COMMAND robertson)

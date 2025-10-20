@@ -5,6 +5,11 @@ This plan outlines how to introduce the Grassmann–Taksar–Heyman (GTH) factor
 ## 1. Assess Current Usage
 - Enumerate every invocation of `linalg::lu_decomposition` and `linalg::lu_solve` in the integrators and tests to catalog expected matrix properties, pivot usage, and error handling.
 - Classify matrices as general Jacobians, Markov generators, or row-stochastic forms to know where GTH can safely substitute LU.
+- **Status (May 2025):**
+  - `include/integrators/backward_euler.hpp` — solves `(I - Δt J) δ = rhs`; dense/general Jacobian, optionally pivoted. Not row-stochastic; GTH not applicable without reformulation.
+  - `include/integrators/vode.hpp` — forms and factors `P = I - h·RL₁·J`; dense/general Jacobian with pivoting mandatory. GTH not applicable.
+  - `include/integrators/dvodpk.hpp` — Krylov preconditioner fallback `I - γ J`; dense/general Jacobian. GTH not applicable.
+  - Tests (`tests/test_linear_algebra.cpp`, `tests/test_gth_robertson.cpp`) — synthetic matrices for validation; current LU calls retained for reference comparisons.
 
 ## 2. Design API Surface
 - Introduce templated entry points `gth_factorization<N>` and `gth_solve<N>` that mirror the LU signatures: in-place matrix reference, working arrays, and integer status code (`0` success, positive pivot index on failure).
@@ -26,6 +31,7 @@ This plan outlines how to introduce the Grassmann–Taksar–Heyman (GTH) factor
 - Extend `linalg::solve_system` (or equivalent) with an overload or policy flag to attempt GTH first when a matrix satisfies `gth_traits::applicable(A)`.
 - Provide detection utilities (static or runtime) to verify structure (non-negative off-diagonal, zero row sums) before opting into GTH; otherwise route to LU.
 - Maintain API backward compatibility so existing callers continue to compile without modifications.
+- **Update:** Implemented `steady_state_gth` (header-only) to offer a Picard iteration backed by GTH for homogeneous steady-state solves. Hooking this into existing integrators still remains to be assessed.
 
 ## 6. Validation Suite
 - Augment `tests/test_linear_algebra.cpp` with:

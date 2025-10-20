@@ -8,6 +8,7 @@
 #include "linear_algebra.hpp"
 #include "backward_euler.hpp"
 #include "dvodpk.hpp"
+#include "steady_state_gth.hpp"
 #include "vode.hpp"
 
 namespace integrators {

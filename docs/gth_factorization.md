@@ -93,3 +93,40 @@ When a chemical kinetics Jacobian represents a closed network with no external s
 5. **Recover the steady state** by applying the normalization to obtain the steady-state concentrations. Because the algorithm never introduces subtraction of nearly equal numbers, it is robust even when the Jacobian is nearly singular due to slow reactions.
 
 This workflow preserves non-negativity and bypasses pivoting, making it attractive for stiff, closed chemical systems where traditional LU solvers struggle to maintain positivity. However, any external source or sink terms must be removed (or handled separately) before applying the GTH factorization, otherwise the denominators in the forward sweep may vanish or become negative.
+
+## Library Usage
+
+The header `include/integrators/linear_algebra.hpp` exposes a subtraction-free implementation ready to integrate with the rest of the library:
+
+```cpp
+#include <integrators/linear_algebra.hpp>
+
+using namespace integrators;
+
+constexpr std::size_t N = 4;
+using Matrix = std::array<std::array<Real, N>, N>;
+using Vector = std::array<Real, N>;
+
+Matrix P = {{
+    {{0.85, 0.10, 0.05, 0.0}},
+    {{0.05, 0.90, 0.05, 0.0}},
+    {{0.10, 0.10, 0.75, 0.05}},
+    {{0.00, 0.10, 0.40, 0.50}}
+}};
+
+Matrix Pfact = P;
+Vector inv_piv{};
+Vector pi{};
+
+int info = linalg::gth_factorization<N>(Pfact, inv_piv, linalg::GthMatrixKind::RowStochastic);
+if (info != 0) { /* handle breakdown */ }
+
+info = linalg::gth_solve<N>(Pfact, inv_piv, pi, 1.0, linalg::GthMatrixKind::RowStochastic);
+if (info != 0) { /* handle breakdown */ }
+```
+
+Internally the factorization overwrites the matrix with censored coefficients and stores the reciprocal pivots in `inv_piv`. The solver reconstructs the stationary vector scaled so `sum(pi) == 1` (or the supplied target). For generator matrices, pass `GthMatrixKind::Generator` and set `norm_target` to the conserved quantity (e.g., species abundance).
+
+The repository contains a runnable example at `examples/gth_stationary.cpp` that computes and verifies a stationary distribution for a four-state Markov chain. Build it with CMake (`cmake --build build --target gth_stationary`) and run the executable to see the factorization in action.
+
+For nonlinear chemistry, the header `include/integrators/steady_state_gth.hpp` provides a Picard-style steady-state solver (`steady_state_gth`) that repeatedly rebuilds the generator with user-supplied rates and applies the GTH sweep at every iteration. Problems that expose a `steady_state_generator(state, matrix)` function can call this utility to converge homogeneous kinetics without touching the time-dependent integrators.
