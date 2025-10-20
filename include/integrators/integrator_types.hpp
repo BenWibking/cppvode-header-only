@@ -8,6 +8,7 @@
 #include <limits>
 #include <array>
 #include <algorithm>
+#include <type_traits>
 
 namespace integrators {
 
@@ -27,6 +28,32 @@ enum class IntegratorResult : int {
     LU_DECOMPOSITION_ERROR = -7
 };
 
+// Identity preconditioner marker used when a problem does not provide one.
+struct IdentityPreconditioner {};
+
+enum class PreconditionerSide {
+    NONE,
+    LEFT,
+    RIGHT,
+    BOTH
+};
+
+namespace detail {
+
+template<typename Problem, typename = void>
+struct problem_preconditioner {
+    using type = IdentityPreconditioner;
+    static constexpr bool available = false;
+};
+
+template<typename Problem>
+struct problem_preconditioner<Problem, std::void_t<typename Problem::preconditioner_type>> {
+    using type = typename Problem::preconditioner_type;
+    static constexpr bool available = true;
+};
+
+} // namespace detail
+
 // Base traits for problem definition
 template<typename Problem>
 struct ProblemTraits {
@@ -34,6 +61,8 @@ struct ProblemTraits {
     using state_type = typename Problem::state_type;
     using rhs_type = typename Problem::rhs_type;
     using jacobian_type = typename Problem::jacobian_type;
+    using preconditioner_type = typename detail::problem_preconditioner<Problem>::type;
+    static constexpr bool has_custom_preconditioner = detail::problem_preconditioner<Problem>::available;
 };
 
 // Base integrator state

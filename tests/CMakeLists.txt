@@ -72,3 +72,8 @@ if(CMAKE_CUDA_COMPILER)
     # Mark as GPU test so CI can identify/skip running if no GPU is present
     set_tests_properties(vode_gpu_test PROPERTIES LABELS "GPU")
 endif()
+
+add_executable(test_dvodpk_robertson test_dvodpk_robertson.cpp)
+target_link_libraries(test_dvodpk_robertson PRIVATE integrators)
+add_test(NAME dvodpk_robertson_test COMMAND test_dvodpk_robertson)
+

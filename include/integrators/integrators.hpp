@@ -7,6 +7,7 @@
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 #include "backward_euler.hpp"
+#include "dvodpk.hpp"
 #include "vode.hpp"
 
 namespace integrators {
@@ -15,7 +16,7 @@ namespace integrators {
 template<typename Problem>
 struct IntegratorFactory {
     
-    enum class Type { BACKWARD_EULER, VODE };
+    enum class Type { BACKWARD_EULER, VODE, DVODPK };
     
     template<Type IntType>
     static auto create() {
@@ -23,6 +24,8 @@ struct IntegratorFactory {
             return BackwardEuler<Problem>{};
         } else if constexpr (IntType == Type::VODE) {
             return VODE<Problem>{};
+        } else if constexpr (IntType == Type::DVODPK) {
+            return DVODPK<Problem>{};
         }
     }
     
@@ -30,7 +33,10 @@ struct IntegratorFactory {
     using state_type = std::conditional_t<
         IntType == Type::BACKWARD_EULER,
         BackwardEulerState<ProblemTraits<Problem>::neqs>,
-        VODEState<ProblemTraits<Problem>::neqs>>;
+        std::conditional_t<
+            IntType == Type::VODE,
+            VODEState<ProblemTraits<Problem>::neqs>,
+            DVODPKState<ProblemTraits<Problem>::neqs, typename ProblemTraits<Problem>::preconditioner_type>>>;
 };
 
 // Convenience aliases
@@ -39,6 +45,9 @@ using BE = BackwardEuler<Problem>;
 
 template<typename Problem>
 using VODE_Integrator = VODE<Problem>;
+
+template<typename Problem>
+using DVODPK_Integrator = DVODPK<Problem>;
 
 } // namespace integrators
 

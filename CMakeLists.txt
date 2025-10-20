@@ -39,8 +39,15 @@ if(INTEGRATORS_VODE_DEBUG)
     target_compile_definitions(integrators INTERFACE VODE_DEBUG)
 endif()
 
+<<<<<<< HEAD
 # Treat warnings as errors (opt-in, excludes CUDA/Fortran)
 option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortran)" OFF)
+=======
+option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+if(BUILD_CUDA_TESTS)
+    enable_language(CUDA)
+endif()
+>>>>>>> ab7c23d (add EXPERIMENTAL dvodpk integrator)
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
