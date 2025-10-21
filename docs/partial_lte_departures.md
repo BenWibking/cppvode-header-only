@@ -1,33 +1,26 @@
-# Design Note: Partial-LTE Departure Integration
+# Design Note: Partial-LTE Snap Strategy
 
 ## Motivation
 
-Many chemistry networks contain a small subset of species that equilibrate rapidly while the remaining components evolve on much slower timescales. The current steady-state departure path assumes the *entire* state is close to LTE, rebases to the nonlinear steady state `y*`, and advances all departures with a frozen Jacobian exponential stepper. This breaks down when only a sub-block is near LTE: forcing the slow species to rebase can introduce large defects, yet continuing with a fully implicit integrator wastes effort resolving rapidly damped modes. We need a mixed strategy that:
+Many chemistry networks contain a small subset of species that equilibrate rapidly while the remaining components evolve on much slower timescales. The current steady-state shortcut now performs a snap-only rebasing of the *entire* state: solve for `y*` with `steady_state_gth`, check detailed balance/timescales, and either overwrite the solution or fall back to VODE. This breaks down when only a sub-block is near LTE: forcing the slow species to snap can introduce large defects, yet continuing with a fully implicit integrator wastes effort resolving rapidly damped modes. We need a mixed strategy that:
 
 1. Reuses the existing `steady_state_gth` machinery to lock just the stiff subset into steady state.
-2. Evolves departures only for that subset, keeping the slow block under the control of the parent integrator (e.g., VODE).
-3. Seamlessly hands control back when the LTE assumption deteriorates.
+2. Applies the snap-or-fallback logic to the fast block while leaving the slow block untouched.
+3. Seamlessly hands control back to the parent integrator when the LTE assumption deteriorates.
 
-This document describes the partitioned departure approach and how it fits within the current library.
+This document sketches how the partial snap controller should work and how it fits within the simplified steady-state handling.
 
 ## High-Level Workflow
 
-1. **Detection:** Monitor the full integrator (VODE) for stiffness symptoms *localized* to a subset of species: tiny steps driven by select Jacobian rows, error-test failures dominated by a single block, or a weighted residual `‖f_S(y)‖` below an LTE threshold while the complement remains dynamic.
-2. **Partition:** Identify index sets `S` (fast/LTE candidates) and `F` (slow). This may be static (provided by the problem) or dynamic (based on diagnostics). Build permutation vectors so vectors/matrices can be rearranged into block form.
-3. **Partial steady state:** Hold `y_F` fixed at its current value and call `steady_state_gth` (or a variant) on the restricted system to solve `f_S(y_S*, y_F) = 0` with the appropriate conservation constraint for the `S` block. The result `y_S*` is a fully nonlinear steady state for the fast species relative to the frozen slow block.
-4. **Departure formation:** Define `δ_S = y_S - y_S*`, set `δ_F = 0`, and cache `A_SS = J_SS(y_S*, y_F)` along with the cross block `A_SF = J_SF(y_S*, y_F)` if needed for diagnostics.
-5. **Departure propagation:** Advance `δ_S` using the existing exponential stepper infrastructure, operating on the reduced system:
-   ```
-   δ̇_S ≈ A_SS δ_S  (since y_F is fixed during the departure step and f_S(y_S*, y_F)=0).
-   ```
-   The exponential cache, defect tests, and rebase triggers now apply to the `S` block only.
-6. **Slow block coupling:** After each accepted departure step, reconstruct the full state:
-   ```
-   y = [ y_S* + δ_S ]
-       [ y_F       ].
-   ```
-   The parent integrator can either (a) skip its own update for `S` while the departure solver is active, or (b) treat the updated `y` as a new starting point before continuing its usual step for `F`.
-7. **Exit / rebase:** If `‖δ_S‖` or the weighted defect exceeds thresholds, or if the partial steady-state solve fails, revert to the full integrator and evolve everyone until partial LTE is detected again.
+1. **Detection:** Monitor VODE for stiffness symptoms *localized* to a subset of species: tiny steps driven by select Jacobian rows, error-test failures dominated by one block, or `‖f_S(y)‖` below an LTE threshold while the complement remains dynamic.
+2. **Partition:** Identify index sets `S` (fast/LTE candidates) and `F` (slow). The partition may be static (problem-provided) or dynamic (diagnostics-driven). Build permutation vectors so vectors/matrices can be rearranged into `(S,F)` block form.
+3. **Partial steady state solve:** Hold `y_F` fixed and call a restricted `steady_state_gth_partial` to obtain `y_S*` satisfying `f_S(y_S*, y_F) = 0` with the appropriate conservation constraint over `S`.
+4. **Snap gate:** Construct the generator restricted to the `S` block and reuse the global snap heuristics in miniature:
+   * Detailed balance per pair `(i,j) ∈ S` via `φ_{i→j} = y*_i · (−G_S[i][j])`.
+   * Relaxation timescales `τ_i = 1 / G_S[i][i]` compared against the caller’s hydro timestep.
+   * Optional weighted distance `|y_i − y*_i| / (atol_i + rtol_i · max(|y_i|, |y*_i|))` for `i ∈ S`.
+5. **Apply snap:** If all gates pass, overwrite `y_S` with `y_S*` (leave `y_F` untouched), reset VODE’s internal history for those indices, and resume integration. Otherwise, record the rejection (for diagnostics) and fall back to the standard VODE step.
+6. **Exit / blacklist:** If the partial solve fails, the gates reject repeatedly, or the fast set changes dramatically, revert to full integration and optionally blacklist the current partition until the system re-enters a comparable LTE regime.
 
 ## Detailed Components
 
@@ -39,90 +32,45 @@ This document describes the partitioned departure approach and how it fits withi
 
 ### 2. Partial Steady-State Solve
 
-- Add `steady_state_gth_partial<Problem>(y_S, y_F, config, mask)`:
-  - Freezes `y_F`.
-  - Builds the generator restricted to `S` (using the mask/permutation).
-  - Enforces normalization on the partial abundance (sum over `S` or individual conserved quantities supplied by the problem).
-  - Returns `y_S*`, status, iteration count, and optionally the permutation used.
-- For problems with coupled invariants spanning both subsets, supply an option to project the conservation equation into the `S` variables (e.g., treat `∑_{i∈S} y_i` as the fast conserved quantity while the remainder is held constant).
+- Implement `steady_state_gth_partial<Problem>(y, mask, config)` that:
+  - Permutes the state into `(S,F)` order and freezes the `F` components.
+  - Builds the generator restricted to `S` using the mask/permutation.
+  - Enforces normalization on the fast abundance (sum over `S` or conserved quantities supplied by the problem).
+  - Returns `y_S*`, the restricted generator, and diagnostics (iterations, residual, permutation).
+- For problems with invariants spanning both subsets, project the conservation law onto `S` (e.g., treat `∑_{i∈S} y_i` as the fast conserved quantity while the remainder stays fixed).
 
-### 3. Departure State Structures
+### 3. Snap Gate Computation
 
-Extend `DepartureState` to track block-specific views:
+- Reuse the global helper’s detailed-balance logic on the restricted generator.
+- Timescale gate: compute `τ_i = 1 / max(G_S[i][i], ε)` for `i ∈ S`; require `max τ_i ≤ safety · dt_hydro`.
+- Distance gate: `|y_i − y*_i| / (atol_i + rtol_i · max(|y_i|, |y*_i|))` for `i ∈ S`.
+- Aggregate the worst violations to generate diagnostics and to decide whether to accept or reject the partial snap.
 
-```cpp
-struct PartialDepartureState {
-    // Global data
-    Real current_time;
-    State y;
+### 4. Coordination with VODE
 
-    // Partition description
-    std::array<size_type, N> order;  // (S,F) permutation
-    size_type n_fast;                // |S|
+Implement a controller (`PartialLTESnapController`) that:
 
-    // Fast block cache
-    State y_star_fast;
-    State delta_fast;
-    Matrix jacobian_ss;
-    State rhs_fast;                  // f_S(y_S*, y_F) == 0 (stored for diagnostics)
+1. Intercepts VODE failures/diagnostics and proposes a partition.
+2. Runs `steady_state_gth_partial` and the snap gate.
+3. On acceptance, overwrites `y_S`, resets the Nordsieck history for those indices, and continues VODE with the same timestep.
+4. On rejection, restores the original state (or keeps it unchanged) and lets VODE retry normally.
+5. Tracks cooldown/blacklist intervals to avoid repeated snap attempts on unstable partitions.
 
-    // Slow block snapshot
-    State y_slow;
-    State atol_fast;
-    State rtol_fast;
-    Real defect_last;
-};
-```
+### 5. Exit Criteria
 
-`DepartureWorkspace` can be reused as-is, operating on `n_fast × n_fast` matrices after permuting into block form.
+Re-use the snap gates to decide acceptance/rejection. Additional exit policies:
 
-### 4. Exponential Stepper Adaptation
+- Partial steady-state solve failure.
+- Hydrodynamic timestep too small relative to the fast timescales.
+- Slow block changed beyond tolerance since the last accepted snap (indicating the fast subset is no longer near LTE).
 
-- Before calling `integrate_departure_step`, restrict the cached matrices and vectors to the fast block via the stored permutation.
-- After each step, scatter the updated fast block back to the full state; the slow block preserves its previous value.
-- Weighted defect computation uses the fast tolerances only. Optionally evaluate the cross defect `r_S = f_S(y_S* + δ_S, y_F) - (A_SS δ_S)` to ensure coupling from `F` does not introduce drift beyond tolerance.
+### 6. Implementation Roadmap
 
-### 5. Coordination with VODE
+1. **Partition utilities:** Add permutation helpers and optional `Problem::lte_partition` hook.
+2. **Partial steady-state API:** Implement and unit-test `steady_state_gth_partial`.
+3. **Gating logic:** Extend `SteadyStateSnapConfig` or add a dedicated structure for partial snaps (balance/timescale/distance tolerances).
+4. **Controller integration:** Embed into VODE’s driver with entry points mirroring the full-state snap pre-check.
+5. **Testing:** Build regression networks where only a subset is near LTE, and verify snap acceptance, rejection, and blacklist behaviour.
+6. **Documentation and examples:** Update this note and add an example (`examples/partial_lte.cpp`) demonstrating selective snapping.
 
-Implement a controller object (`PartialLTEController`) that:
-
-1. Intercepts VODE failures/diagnostics.
-2. Runs the partition detection and partial steady-state solve.
-3. Invokes the reduced departure integrator for one or more macro-steps (advancing `y_S` only).
-4. Returns control to VODE with the updated full state and a suggestion for the next `dt` for the slow integrator.
-
-Key policy decisions:
-
-- **Step sequencing:** Either (a) lock VODE out while the departure solver advances `t` to the requested `tout`, or (b) interleave small departure steps between standard VODE steps so that `F` continues to evolve.
-- **Time synchronization:** If the departure path advances the global time, the slow block must be extrapolated or held constant over the same interval. A simple first phase keeps `y_F` fixed; future work can use an explicit prediction for `y_F` to include first-order coupling terms (`J_SF δ_F`) if needed.
-
-### 6. Exit Criteria
-
-Re-use the existing thresholds with block-specific scopes:
-
-- `‖δ_S‖_∞` exceeding `max_departure_norm_fast`.
-- Weighted defect `max_i |r_S,i|/(atol_S,i + rtol_S,i |y_i|)` exceeding `rebase_defect_fast`.
-- Partial steady-state solver failure or requirement to rotate species in/out of the LTE set.
-- Large changes detected in `y_F` while the departure solver is active (indicating the assumption of a frozen slow block no longer holds).
-
-When any trigger fires, flush the cache, restore control to VODE, and optionally blacklist the current partition until the system re-enters a comparable LTE regime.
-
-### 7. IMEX Relationship
-
-Although the split resembles IMEX integration, note the conceptual differences:
-
-- The departure solver operates in coordinates shifted by the nonlinear steady state of the fast block.
-- The slow RHS is not integrated additively during the departure step; the slow species are treated as parameters.
-- To emulate an IMEX formulation, we would need to add explicit coupling terms for the slow update; that remains out-of-scope for the first iteration but is an avenue for future refinement.
-
-### 8. Implementation Roadmap
-
-1. **Partition infrastructure:** Add permutation utilities and problem hooks (`lte_partition`). Provide default no-op implementations for problems that do not expose LTE subsets.
-2. **Partial steady-state API:** Implement `steady_state_gth_partial` with unit tests covering simple block-partitioned systems.
-3. **State extensions:** Introduce `PartialDepartureState`/`PartialDepartureWorkspace` wrappers that sit atop the existing departure machinery.
-4. **Integrator loop plumbing:** Create `integrate_partial_departure_step` that slices the fast block, calls the existing exponential stepper, and assembles the full state afterward.
-5. **Controller integration:** Embed into VODE’s driver logic with entry/exit hooks mirroring the full-state departure path. Add diagnostics to log partition changes and exit causes.
-6. **Testing:** Craft regression tests where only part of the system is near LTE (e.g., synthetic two-time-scale kinetics) and verify the solver stabilizes the fast block while the slow block keeps evolving.
-7. **Documentation and examples:** Update the steady-state departure docs to cover partial LTE and add an example (e.g., `examples/partial_lte.cpp`) demonstrating the workflow.
-
-With this blueprint, the partial-LTE departure integrator can reuse most of the infrastructure built for the full-state case while addressing realistic scenarios where only a handful of species hug steady state.
+With this blueprint, the partial-LTE controller reuses the simplified snap infrastructure while addressing realistic scenarios where only a handful of species hug steady state.
