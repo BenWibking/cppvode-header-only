@@ -95,6 +95,8 @@ case SteadyStateSnapResult::Failure:
 }
 ```
 
+The `VODEState` structure exposes these tuning knobs directly: set `steady_state_snap_enabled` to disable the shortcut entirely, or adjust `steady_state_snap_balance_tolerance`, `steady_state_snap_timescale_safety`, and the other snap parameters before invoking `integrate`.
+
 ## Generator Synthesis
 
 For automatically generated chemistry problems, reuse the symbolic Jacobian machinery to emit `steady_state_generator`. With stoichiometric matrices `ν⁻` and `ν⁺` and reaction rates `k_r(y)`:

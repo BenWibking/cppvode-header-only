@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
@@ -67,6 +68,15 @@ struct VODEState : public IntegratorState<N> {
     // Integration limits
     int max_steps{1000};
 
+    // Steady-state snap configuration
+    bool steady_state_snap_enabled{true};
+    Real steady_state_snap_balance_tolerance{1.0e-3};
+    Real steady_state_snap_balance_floor{1.0e-30};
+    Real steady_state_snap_timescale_safety{0.3};
+    Real steady_state_snap_min_diagonal{1.0e-30};
+    Real steady_state_snap_max_departure_tolerance{std::numeric_limits<Real>::infinity()};
+    Real steady_state_snap_departure_floor{1.0e-30};
+
     // Coefficients and arrays (1-based in algorithm; we map i->i-1)
     std::array<Real, VODE_LMAX> el{};   // 1..L
     std::array<Real, VODE_LMAX> tau{};  // 1..L
@@ -116,6 +126,9 @@ private:
                                       Real time_point,
                                       Real hydro_dt) {
         if constexpr (detail::has_steady_state_generator<Problem>::value) {
+            if (!s.steady_state_snap_enabled) {
+                return false;
+            }
             if (!(hydro_dt > Real{0})) {
                 return false;
             }
@@ -132,6 +145,12 @@ private:
             SteadyStateSnapConfig cfg{};
             cfg.steady_state.atol = s.atol;
             cfg.steady_state.rtol = s.rtol;
+            cfg.balance_tolerance = s.steady_state_snap_balance_tolerance;
+            cfg.balance_floor = s.steady_state_snap_balance_floor;
+            cfg.timescale_safety = s.steady_state_snap_timescale_safety;
+            cfg.min_diagonal = s.steady_state_snap_min_diagonal;
+            cfg.max_departure_tolerance = s.steady_state_snap_max_departure_tolerance;
+            cfg.departure_floor = s.steady_state_snap_departure_floor;
             Real norm_target = std::accumulate(candidate.begin(), candidate.end(), Real{0});
             if (!(norm_target > Real{0})) {
                 norm_target = Real{1};

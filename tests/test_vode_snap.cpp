@@ -108,6 +108,29 @@ bool test_vode_fallback_after_snap_reject() {
     return state.n_step > 0 && not_snapped;
 }
 
+bool test_snap_disabled() {
+    std::cout << "[vode_snap] disabled snap falls back to VODE\n";
+
+    VODE<SnapProblem> solver;
+    VODEState<SnapProblem::neqs> state;
+    state.t = 0.0;
+    state.tout = 0.1;
+    state.y = {0.2, 0.8};
+    state.rtol = 1.0e-6;
+    state.atol = 1.0e-12;
+    state.jacobian_analytic = true;
+    state.steady_state_snap_enabled = false;
+
+    auto problem_state = state.y;
+    const auto result = solver.integrate(problem_state, state);
+    if (result != IntegratorResult::SUCCESS) {
+        std::cout << "  integrate returned status " << static_cast<int>(result) << "\n";
+        return false;
+    }
+
+    return state.n_step > 0;
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +141,10 @@ int main() {
     }
     if (!test_vode_fallback_after_snap_reject()) {
         std::cout << "fallback test: FAILED\n";
+        failures++;
+    }
+    if (!test_snap_disabled()) {
+        std::cout << "disabled snap test: FAILED\n";
         failures++;
     }
 
