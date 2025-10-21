@@ -13,8 +13,8 @@ This note records the gating logic, configuration knobs, and integration points 
 ## Workflow Overview
 
 1. **Detect a candidate LTE regime**
-   * Run VODE as usual. If it rejects steps, underflows `dt`, or hits the step limit, hand the current state to the snap helper before retrying.
-   * Optional: perform the snap attempt proactively whenever diagnostics (e.g., residual norms) suggest near-LTE behavior to avoid even starting VODE.
+   * The VODE driver now calls `attempt_steady_state_snap` before it takes the first step toward `tout`. When the helper accepts, the integrator returns immediately with the snapped state.
+   * If the helper rejects (detailed balance or timescale gate fails), VODE proceeds with its normal stiff stepping. Should VODE later signal a hard failure without having performed the snap pre-check (e.g., the helper was skipped because `∆t = 0`), the driver retries the helper once before propagating the failure.
 
 2. **Solve for `y*` using GTH**
    * Call `steady_state_gth<Problem>(y_guess, config)` with the current composition as the initial guess. Problems must expose `steady_state_generator(state, matrix)` and may supply a permutation via `steady_state_order(order)`.

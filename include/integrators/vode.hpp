@@ -7,8 +7,10 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <numeric>
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
+#include "steady_state_departure.hpp"
 
 namespace integrators {
 
@@ -106,6 +108,67 @@ private:
     // Evaluate analytic Jacobian if available
     static inline void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
         Problem::jacobian(t, y, J);
+    }
+
+    static bool try_steady_state_snap(State& s,
+                                      bool allow_fallback,
+                                      const typename ProblemTraits<Problem>::state_type& base_state,
+                                      Real time_point,
+                                      Real hydro_dt) {
+        if constexpr (detail::has_steady_state_generator<Problem>::value) {
+            if (!(hydro_dt > Real{0})) {
+                return false;
+            }
+
+            using StateVec = typename ProblemTraits<Problem>::state_type;
+            StateVec candidate = base_state;
+            StateVec atol_vec{};
+            StateVec rtol_vec{};
+            for (size_type i = 0; i < N; ++i) {
+                atol_vec[i] = s.atol;
+                rtol_vec[i] = s.rtol;
+            }
+
+            SteadyStateSnapConfig cfg{};
+            cfg.steady_state.atol = s.atol;
+            cfg.steady_state.rtol = s.rtol;
+            Real norm_target = std::accumulate(candidate.begin(), candidate.end(), Real{0});
+            if (!(norm_target > Real{0})) {
+                norm_target = Real{1};
+            }
+            cfg.steady_state.norm_target = norm_target;
+
+            const auto outcome = attempt_steady_state_snap<Problem>(time_point,
+                                                                    candidate,
+                                                                    atol_vec,
+                                                                    rtol_vec,
+                                                                    hydro_dt,
+                                                                    allow_fallback,
+                                                                    cfg);
+            if (outcome.result == SteadyStateSnapResult::Snapped) {
+                for (size_type i = 0; i < N; ++i) {
+                    s.y[i] = candidate[i];
+                    s.YH(static_cast<int>(i+1), 1) = candidate[i];
+                    for (int j = 2; j <= VODE_LMAX; ++j) {
+                        s.YH(static_cast<int>(i+1), j) = 0.0;
+                    }
+                }
+                s.t = s.tout;
+                s.tn = s.tout;
+                s.n_step = 0;
+                s.err_fails = 0;
+                return true;
+            }
+
+            return false;
+        } else {
+            static_cast<void>(s);
+            static_cast<void>(allow_fallback);
+            static_cast<void>(base_state);
+            static_cast<void>(time_point);
+            static_cast<void>(hydro_dt);
+            return false;
+        }
     }
 
     // dvset: set integration coefficients
@@ -694,6 +757,27 @@ public:
     IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
+        using Vector = ProblemState;
+        bool snap_attempted = false;
+        auto attempt_snap_once = [&](bool allow_fallback,
+                                     Vector base_state,
+                                     Real time_point,
+                                     Real hydro_dt) -> bool {
+            if (snap_attempted) {
+                return false;
+            }
+            if (!(hydro_dt > Real{0})) {
+                return false;
+            }
+            snap_attempted = true;
+            return try_steady_state_snap(s, allow_fallback, base_state, time_point, hydro_dt);
+        };
+
+        const Real initial_hydro_dt = std::abs(s.tout - s.t);
+        if (attempt_snap_once(true, s.y, s.t, initial_hydro_dt)) {
+            return IntegratorResult::SUCCESS;
+        }
+
         // Initialize
         s.tn = s.t; s.n_step = 0; s.n_jac = 0; s.NSLJ = 0;
 
@@ -707,7 +791,12 @@ public:
 
         // Initial step size
         Real H0 = 0.0; int NITER = 0; int IER = 0; dvhin(s, H0, NITER, IER); s.n_rhs += NITER;
-        if (IER != 0) return IntegratorResult::DT_UNDERFLOW;
+        if (IER != 0) {
+            if (attempt_snap_once(false, s.y, s.t, std::abs(s.tout - s.t))) {
+                return IntegratorResult::SUCCESS;
+            }
+            return IntegratorResult::DT_UNDERFLOW;
+        }
         s.H = H0; for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),2) *= s.H;
 
         // Initialize method/order and related vars (match DVODE semantics)
@@ -719,7 +808,11 @@ public:
         while (true) {
             if (!skip_loop_start) {
                 if (s.n_step >= s.max_steps) {
-                    // too many steps
+                    Vector base{};
+                    for (size_type i = 0; i < N; ++i) base[i] = s.YH(static_cast<int>(i+1),1);
+                    if (attempt_snap_once(false, base, s.tn, std::abs(s.tout - s.tn))) {
+                        return IntegratorResult::SUCCESS;
+                    }
                     for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
                     s.t = s.tn; return IntegratorResult::TOO_MANY_STEPS;
                 }
@@ -730,14 +823,40 @@ public:
             Real TOLSF = 0.0; for (size_type i = 0; i < N; ++i) TOLSF += (s.YH(static_cast<int>(i+1),1)*s.ewt[i])*(s.YH(static_cast<int>(i+1),1)*s.ewt[i]);
             TOLSF = math::UROUND * std::sqrt(TOLSF / static_cast<Real>(N));
             if (TOLSF > 1.0) {
-                if (s.n_step == 0) return IntegratorResult::TOO_MUCH_ACCURACY_REQUESTED;
+                if (s.n_step == 0) {
+                    if (attempt_snap_once(false, s.y, s.tn, std::abs(s.tout - s.tn))) {
+                        return IntegratorResult::SUCCESS;
+                    }
+                    return IntegratorResult::TOO_MUCH_ACCURACY_REQUESTED;
+                }
+                Vector base{};
+                for (size_type i = 0; i < N; ++i) base[i] = s.YH(static_cast<int>(i+1),1);
+                if (attempt_snap_once(false, base, s.tn, std::abs(s.tout - s.tn))) {
+                    return IntegratorResult::SUCCESS;
+                }
                 for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
                 s.t = s.tn; return IntegratorResult::TOO_MUCH_ACCURACY_REQUESTED;
             }
 
             int kflag = dvstep(s);
-            if (kflag == -1) { for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1); s.t = s.tn; return IntegratorResult::DT_UNDERFLOW; }
-            if (kflag == -2) { for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1); s.t = s.tn; return IntegratorResult::CORRECTOR_CONVERGENCE; }
+            if (kflag == -1) {
+                Vector base{};
+                for (size_type i = 0; i < N; ++i) base[i] = s.YH(static_cast<int>(i+1),1);
+                if (attempt_snap_once(false, base, s.tn, std::abs(s.tout - s.tn))) {
+                    return IntegratorResult::SUCCESS;
+                }
+                for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
+                s.t = s.tn; return IntegratorResult::DT_UNDERFLOW;
+            }
+            if (kflag == -2) {
+                Vector base{};
+                for (size_type i = 0; i < N; ++i) base[i] = s.YH(static_cast<int>(i+1),1);
+                if (attempt_snap_once(false, base, s.tn, std::abs(s.tout - s.tn))) {
+                    return IntegratorResult::SUCCESS;
+                }
+                for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
+                s.t = s.tn; return IntegratorResult::CORRECTOR_CONVERGENCE;
+            }
 
             // stop criterion
             if ((s.tn - s.tout) * s.H < 0.0) continue;

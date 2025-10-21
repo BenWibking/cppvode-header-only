@@ -34,6 +34,10 @@ add_executable(test_vode_linear_invariants_numjac test_vode_linear_invariants_nu
 target_link_libraries(test_vode_linear_invariants_numjac PRIVATE integrators)
 add_test(NAME vode_linear_invariants_numjac_test COMMAND test_vode_linear_invariants_numjac)
 
+add_executable(test_vode_snap test_vode_snap.cpp)
+target_link_libraries(test_vode_snap PRIVATE integrators)
+add_test(NAME vode_snap_test COMMAND test_vode_snap)
+
 # GPU test (requires CUDA)
 if(CMAKE_CUDA_COMPILER)
     add_executable(test_vode_gpu test_vode_gpu.cu)
