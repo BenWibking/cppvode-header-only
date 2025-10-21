@@ -27,11 +27,13 @@ This note sketches how to achieve that using the existing solver stack:
 
 4. **Integrate the Departures**
    * Freeze the Jacobian at the LTE reference: evaluate `A = J(y\*)` and the residual vector `b = f(y\*)`.
-   * Propagate `δ` with an exponential integrator for the linear system `δ̇ = A δ + b`, reusing factorizations of `A` so each macro-step costs one dense solve.
-   * For the small systems we target (`N < 40`), use a real-Schur decomposition to precompute `exp(hA)` and the `φ₁(hA)` action efficiently.
-   * After each exponential step, form the nonlinear defect `r = f(y\* + δ) - (A δ + b)`; accept the step while `‖r‖` stays below a tolerance tied to the LTE tube.
-   * This strategy assumes the RHS is autonomous (no explicit `t` dependence) and that the problem exposes an analytic Jacobian.
-   * If both the departure `δ` and the residual `f(y)` fall below chemistry tolerances, bypass the exponential step entirely and snap the state to `y\*`, since the update would be smaller than the desired accuracy.
+* Propagate `δ` with an exponential integrator for the linear system `δ̇ = A δ + b`, reusing factorizations of `A` so each macro-step costs one dense solve.
+* For the small systems we target (`N < 40`), use a real-Schur decomposition to precompute `exp(hA)` and the `φ₁(hA)` action efficiently.
+* After each exponential step, form the nonlinear defect `r = f(y\* + δ) - (A δ + b)`; accept the step while `‖r‖` stays below a tolerance tied to the LTE tube.
+* This strategy assumes the RHS is autonomous (no explicit `t` dependence) and that the problem exposes an analytic Jacobian.
+* If both the departure `δ` and the residual `f(y)` fall below chemistry tolerances, bypass the exponential step entirely and snap the state to `y\*`, since the update would be smaller than the desired accuracy.
+    * When deciding to snap, reuse the generator matrix that `steady_state_gth` already evaluated at `y\*` (`Problem::steady_state_generator(y\*, generator)`). For each unordered pair `(i, j)` compute forward/backward fluxes `φ_{i→j} = y\*_i · (−generator[i][j])` and `φ_{j→i} = y\*_j · (−generator[j][i])`; require `|φ_{i→j} − φ_{j→i}| / (ε + max(φ_{i→j}, φ_{j→i})) ≤ τ_balance` (e.g. `τ_balance ≈ 1e−3`). This enforces detailed balance directly from the converged generator coefficients.
+    * The same generator diagonals give per-species relaxation times (`τ_i = 1 / max(generator[i][i], ε)`); gate the snap on `max_i τ_i ≤ safety · dt_hydro`, ensuring all reaction timescales remain comfortably below the hydrodynamic step.
 
 5. **Adaptive Re-basing**
    * Periodically (or when `||δ||` exceeds a threshold) recompute the steady state:
