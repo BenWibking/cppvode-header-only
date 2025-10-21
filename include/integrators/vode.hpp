@@ -3,12 +3,13 @@
 #ifndef VODE_HPP
 #define VODE_HPP
 
+#include <algorithm>
 #include <array>
 #include <cmath>
-#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 #include "steady_state_departure.hpp"
@@ -121,17 +122,18 @@ private:
         Problem::jacobian(t, y, J);
     }
 
-    static bool try_steady_state_snap(State& s,
-                                      bool allow_fallback,
-                                      const typename ProblemTraits<Problem>::state_type& base_state,
-                                      Real time_point,
-                                      Real hydro_dt) {
+    static std::optional<SteadyStateSnapOutcome> try_steady_state_snap(
+        State& s,
+        [[maybe_unused]] bool allow_fallback,
+        const typename ProblemTraits<Problem>::state_type& base_state,
+        Real time_point,
+        Real hydro_dt) {
         if constexpr (detail::has_steady_state_generator<Problem>::value) {
             if (!s.steady_state_snap_enabled) {
-                return false;
+                return std::nullopt;
             }
             if (!(hydro_dt > Real{0})) {
-                return false;
+                return std::nullopt;
             }
 
             using StateVec = typename ProblemTraits<Problem>::state_type;
@@ -178,17 +180,15 @@ private:
                 s.tn = s.tout;
                 s.n_step = 0;
                 s.err_fails = 0;
-                return true;
             }
 
-            return false;
+            return outcome;
         } else {
             static_cast<void>(s);
-            static_cast<void>(allow_fallback);
             static_cast<void>(base_state);
             static_cast<void>(time_point);
             static_cast<void>(hydro_dt);
-            return false;
+            return std::nullopt;
         }
     }
 
@@ -790,8 +790,12 @@ public:
             if (!(hydro_dt > Real{0})) {
                 return false;
             }
+            auto outcome = try_steady_state_snap(s, allow_fallback, base_state, time_point, hydro_dt);
+            if (!outcome.has_value()) {
+                return false;
+            }
             snap_attempted = true;
-            return try_steady_state_snap(s, allow_fallback, base_state, time_point, hydro_dt);
+            return outcome->result == SteadyStateSnapResult::Snapped;
         };
 
         const Real initial_hydro_dt = std::abs(s.tout - s.t);
