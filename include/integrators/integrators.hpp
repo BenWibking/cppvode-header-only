@@ -7,7 +7,6 @@
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 #include "backward_euler.hpp"
-#include "dvodpk.hpp"
 #include "vode.hpp"
 
 namespace integrators {
@@ -16,27 +15,35 @@ namespace integrators {
 template<typename Problem>
 struct IntegratorFactory {
     
-    enum class Type { BACKWARD_EULER, VODE, DVODPK };
+    enum class Type { BACKWARD_EULER, VODE };
     
     template<Type IntType>
     static auto create() {
         if constexpr (IntType == Type::BACKWARD_EULER) {
             return BackwardEuler<Problem>{};
-        } else if constexpr (IntType == Type::VODE) {
+        } else {
+            static_assert(IntType == Type::VODE, "Unsupported integrator type");
             return VODE<Problem>{};
-        } else if constexpr (IntType == Type::DVODPK) {
-            return DVODPK<Problem>{};
         }
     }
     
+private:
+    template<Type>
+    struct state_selector;
+
+    template<>
+    struct state_selector<Type::BACKWARD_EULER> {
+        using type = BackwardEulerState<ProblemTraits<Problem>::neqs>;
+    };
+
+    template<>
+    struct state_selector<Type::VODE> {
+        using type = VODEState<ProblemTraits<Problem>::neqs>;
+    };
+
+public:
     template<Type IntType>
-    using state_type = std::conditional_t<
-        IntType == Type::BACKWARD_EULER,
-        BackwardEulerState<ProblemTraits<Problem>::neqs>,
-        std::conditional_t<
-            IntType == Type::VODE,
-            VODEState<ProblemTraits<Problem>::neqs>,
-            DVODPKState<ProblemTraits<Problem>::neqs, typename ProblemTraits<Problem>::preconditioner_type>>>;
+    using state_type = typename state_selector<IntType>::type;
 };
 
 // Convenience aliases
@@ -45,9 +52,6 @@ using BE = BackwardEuler<Problem>;
 
 template<typename Problem>
 using VODE_Integrator = VODE<Problem>;
-
-template<typename Problem>
-using DVODPK_Integrator = DVODPK<Problem>;
 
 } // namespace integrators
 
