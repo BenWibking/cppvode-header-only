@@ -12,8 +12,9 @@ This note sketches how to achieve that using the existing solver stack:
 ## Workflow Overview
 
 1. **Detect Near-Steady Dynamics**
-   * Monitor the relative correction produced by VODE during Newton updates (`s.acor`/`acnrm_last`) or the residual of the chemical RHS.
-   * Once the normalized residual falls below a threshold (e.g. `||f(y)|| < ε_steady`), freeze the standard time integration and switch to the steady-state pathway.
+   * Two entry paths are supported:
+     * **Default failover:** Run VODE (or the existing stiff solver) as usual. If it succeeds, continue. If it fails with `TOO_MANY_STEPS`, repeated error-test failures, or timestep underflow, attempt a steady-state rebase: compute `y\*`, `A = J(y\*)`, `b = f(y\*)`, and evaluate the weighted defect `r = f(y) - (A δ + b)` at the current state. Enter the steady-state departure workflow only if `max_i |r_i| / (atol_i + rtol_i · |y_i|)` falls below a user-tuned entry tolerance, signalling that VODE stalled because of near-LTE stiffness rather than a real instability.
+     * **Optional pre-check:** When a runtime flag (e.g. `precheck_defect`) is enabled, perform the steady-state solve and defect test before calling VODE. If the weighted defect already satisfies the entry tolerance, skip the VODE attempt and start directly in exponential mode; otherwise fall back to VODE.
 
 2. **Compute the Reference State**
    * Call `steady_state_gth<Problem>(y, config)` with the current composition as the initial guess.
@@ -22,12 +23,15 @@ This note sketches how to achieve that using the existing solver stack:
 
 3. **Form Perturbations**
    * Define `δ = y - y\*`. When `||δ||` is small, the kinetic equation linearizes to `δ̇ ≈ J(y\*) δ + higher-order terms`.
-   * Store `y\*` separately; VODE will now operate on `δ`.
+   * Store `y\*` separately; all subsequent integration operates on the departure `δ`.
 
 4. **Integrate the Departures**
-   * Instantiate a lightweight wrapper `ProblemDelta` whose state vector is `δ` and whose RHS evaluates `f(y\* + δ) - f(y\*)`.
-   * Pass `ProblemDelta` and an initial `δ` into `VODE<ProblemDelta>` using the existing API (`integrate(problem_state, state)`).
-   * Because `δ` evolves near zero, stiffness is reduced and VODE's step sizes remain large even in steady regimes.
+   * Freeze the Jacobian at the LTE reference: evaluate `A = J(y\*)` and the residual vector `b = f(y\*)`.
+   * Propagate `δ` with an exponential integrator for the linear system `δ̇ = A δ + b`, reusing factorizations of `A` so each macro-step costs one dense solve.
+   * For the small systems we target (`N < 40`), use a real-Schur decomposition to precompute `exp(hA)` and the `φ₁(hA)` action efficiently.
+   * After each exponential step, form the nonlinear defect `r = f(y\* + δ) - (A δ + b)`; accept the step while `‖r‖` stays below a tolerance tied to the LTE tube.
+   * This strategy assumes the RHS is autonomous (no explicit `t` dependence) and that the problem exposes an analytic Jacobian.
+   * If both the departure `δ` and the residual `f(y)` fall below chemistry tolerances, bypass the exponential step entirely and snap the state to `y\*`, since the update would be smaller than the desired accuracy.
 
 5. **Adaptive Re-basing**
    * Periodically (or when `||δ||` exceeds a threshold) recompute the steady state:
@@ -42,73 +46,120 @@ This note sketches how to achieve that using the existing solver stack:
 ## Implementation Sketch
 
 ```cpp
+using integrators::ProblemTraits;
+using integrators::SteadyStateGthConfig;
+using integrators::SteadyStateStatus;
+using integrators::steady_state_gth;
+using Real = integrators::Real;
+
 using Problem = MyKinetics;
 using State = typename ProblemTraits<Problem>::state_type;
+using Matrix = typename ProblemTraits<Problem>::jacobian_type;
 
-State y = /* current abundance vector */;
+// Assumptions: autonomous RHS and analytic Jacobian available at y*
+Real current_time = /* current simulation time */;
+State y_full = /* current composition */;
+State y_star = y_full;
 SteadyStateGthConfig cfg;
-cfg.norm_target = std::accumulate(y.begin(), y.end(), 0.0);
+cfg.norm_target = std::accumulate(y_full.begin(), y_full.end(), 0.0);
+State atol{}; // per-species absolute tolerances (reuse values from the VODE chemistry driver)
+State rtol{}; // per-species relative tolerances
+initialize_tolerances(atol, rtol);
+Real defect_tolerance = Real{0.3}; // loosen or tighten to match chemistry accuracy targets
 
 // 1. Steady-state solve
-auto ss_result = steady_state_gth<Problem>(y, cfg);
+auto ss_result = steady_state_gth<Problem>(y_star, cfg);
 if (ss_result.status != SteadyStateStatus::Success) {
     // fall back to standard VODE integration
 }
 
-State y_star = y;                 // steady state
-State delta{};                    // perturbation
-for (size_type i = 0; i < delta.size(); ++i) {
-    delta[i] = current_state[i] - y_star[i];
+// 2. Form perturbations about the steady state y*
+State delta{};
+for (std::size_t i = 0; i < delta.size(); ++i) {
+    delta[i] = y_full[i] - y_star[i];
 }
 
-// 2. Wrap RHS around delta
-ProblemDelta wrapped{y_star};
-VODE<ProblemDelta> vode_delta;
-VODEState<ProblemDelta::neqs> vode_state;
-vode_state.y = delta;
-/* configure tolerances, time span, etc. */
+// 3. Build the frozen linear model δ̇ = A δ + b
+Matrix A{};
+Problem::jacobian(current_time, y_star, A);
+State b{};
+Problem::rhs(current_time, y_star, b);
 
-auto status = vode_delta.integrate(wrapped, vode_state);
-if (status == IntegratorResult::SUCCESS) {
-    // reconstruct full state
-    for (size_type i = 0; i < delta.size(); ++i) {
-        current_state[i] = y_star[i] + vode_state.y[i];
+// 4. Real-Schur decomposition of A (small dense matrix: N < 40)
+SchurDecomposition<Matrix> schur = schur_decompose(A); // returns Q, T
+Matrix Q = schur.Q;
+Matrix T = schur.T;
+
+// Rotate into Schur space
+State delta_hat = mul_transpose(Q, delta);
+State b_hat = mul_transpose(Q, b);
+
+Real h = choose_step_size(/* heuristics based on LTE window */);
+Matrix exp_hT = matrix_exponential_scaled(T, h);
+Matrix phi1_hT = matrix_phi1(T, h);
+
+Real t = current_time;
+while (t < target_time) {
+    // Exact propagation for the frozen linear system
+    State delta_hat_trial = mat_vec(exp_hT, delta_hat);
+    if (!is_near_zero(b_hat)) {
+        State correction = mat_vec(phi1_hT, b_hat);
+        for (std::size_t i = 0; i < correction.size(); ++i) {
+            delta_hat_trial[i] += h * correction[i];
+        }
+    }
+
+    State delta_trial = mat_vec_transpose(Q, delta_hat_trial);
+    State y_trial{};
+    for (std::size_t i = 0; i < y_trial.size(); ++i) {
+        y_trial[i] = y_star[i] + delta_trial[i];
+    }
+
+    // Defect-based accept/reject
+    State rhs_full{};
+    Problem::rhs(t + h, y_trial, rhs_full);
+    State defect{};
+    for (std::size_t i = 0; i < defect.size(); ++i) {
+        defect[i] = rhs_full[i] - (mat_vec(A, delta_trial)[i] + b[i]);
+    }
+
+    Real max_weighted_defect = Real{0};
+    for (std::size_t i = 0; i < defect.size(); ++i) {
+        Real weight = atol[i] + rtol[i] * std::abs(y_trial[i]);
+        max_weighted_defect = std::max(max_weighted_defect, std::abs(defect[i]) / std::max(weight, Real{1e-30}));
+    }
+    if (max_weighted_defect <= defect_tolerance) {
+        delta_hat = delta_hat_trial;
+        delta = delta_trial;
+        y_full = y_trial;
+        t += h;
+        // optional: consider increasing h modestly when successive accepts occur
+    } else {
+        h *= Real{0.5};
+        exp_hT = matrix_exponential_scaled(T, h);
+        phi1_hT = matrix_phi1(T, h);
+        // retry without advancing time
+        continue;
+    }
+
+    Real defect_norm = norm(defect);
+    if (should_rebase(delta, defect_norm)) {
+        break; // hand control back to the main integrator or refresh y*
     }
 }
 ```
 
-Where `ProblemDelta` simply forwards to the original RHS:
+The helpers (`initialize_tolerances`, `schur_decompose`, `matrix_exponential_scaled`, `matrix_phi1`, `mat_vec`, `mat_vec_transpose`, `mul_transpose`, `norm`, `is_near_zero`) are thin wrappers around dense linear algebra routines (Eigen/LAPACK) that operate on the small `N × N` matrices in this regime. `should_rebase` encapsulates user logic for switching back to the nonlinear integrator. The defect test mirrors VODE’s error-weighting strategy by dividing each component by `atol + rtol · |y|`, so the exponential step is accepted exactly when the unmodelled nonlinear drift would stay within the familiar chemistry tolerances.
 
-```cpp
-struct ProblemDelta {
-    static constexpr size_type neqs = Problem::neqs;
-    using state_type = std::array<Real, neqs>;
-    using rhs_type   = state_type;
-    State y_star;
+A complementary change is planned for the JAFF network generator so that the C++ output can synthesize the required steady-state hooks automatically:
 
-    explicit ProblemDelta(const State& y_ss) : y_star(y_ss) {}
-
-    static void rhs(Real t, const state_type& delta, rhs_type& ddelta_dt) {
-        State full{};
-        for (size_type i = 0; i < neqs; ++i) {
-            full[i] = y_star[i] + delta[i];
-        }
-        rhs_type f_full{};
-        Problem::rhs(t, full, f_full);
-        rhs_type f_star{};
-        Problem::rhs(t, y_star, f_star);
-        for (size_type i = 0; i < neqs; ++i) {
-            ddelta_dt[i] = f_full[i] - f_star[i];
-        }
-    }
-};
-```
+*Symbolic Generator Synthesis* — During network parsing, retain the stoichiometric matrices `ν⁻` and `ν⁺`. Use SymPy to assemble per-reaction rate expressions `k_r(y)` (the same objects already used for the Jacobian). Build the generator symbolically via `G[i][j] = -Σ_r ν⁻_{r,i}·ν⁺_{r,j}·k_r(y)·y^{ν⁻_r}`, with diagonals reset to the negative row sum. Apply SymPy CSE to emit compact C++ for `steady_state_generator`. Compute a permutation from the reaction graph (edges where both `ν⁻` and `ν⁺` are non-zero) to populate `steady_state_order`. The KokkoS template will include these functions behind an optional flag, so deployed networks can provide the generator/order pair without hand-written code.
 
 ## Transition Criteria
 
 * **Enter departure mode** when VODE reports repeated error test failures due to tiny steps, or the linear solve residual `||savf||` falls below `ε_steady`.
 * **Leave departure mode** when `||δ||` surpasses a user-defined limit or when `steady_state_gth` fails to converge.
-* **Re-base** every time `||δ||` falls below a tighter tolerance, ensuring accumulated numerical error does not corrupt `y\*`.
+* **Re-base** whenever the defect-based acceptance test starts rejecting steps repeatedly; refresh `y\*`, recompute `A`, and rebuild the Schur/exponential factors.
 
 ## Future Work
 
@@ -116,4 +167,4 @@ struct ProblemDelta {
 * Extend `steady_state_gth` to support generator updates in-place, reducing memory traffic during repeated calls.
 * Explore low-rank updates in the Picard loop to accelerate the steady-state recomputation.
 
-This departure-based integration path keeps the existing solver infrastructure intact while enabling robust time evolution through stiff, near-equilibrium phases. A companion Matplotlib script for the phase-portrait illustration lives in `docs/scripts/steady_state_phase.py`; running it will produce `steady_state_departures_phase.png` for use in presentations or extended documentation.
+This departure-based integration path keeps the existing solver infrastructure intact while reusing steady-state Jacobians to drive an exponential propagator through stiff, near-equilibrium phases.
