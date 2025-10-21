@@ -84,3 +84,7 @@ add_test(NAME gth_robertson_test COMMAND test_gth_robertson)
 add_executable(test_steady_state_gth test_steady_state_gth.cpp)
 target_link_libraries(test_steady_state_gth PRIVATE integrators)
 add_test(NAME steady_state_gth_test COMMAND test_steady_state_gth)
+
+add_executable(test_steady_state_departure test_steady_state_departure.cpp)
+target_link_libraries(test_steady_state_departure PRIVATE integrators)
+add_test(NAME steady_state_departure_test COMMAND test_steady_state_departure)

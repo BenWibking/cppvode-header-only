@@ -167,4 +167,22 @@ A complementary change is planned for the JAFF network generator so that the C++
 * Extend `steady_state_gth` to support generator updates in-place, reducing memory traffic during repeated calls.
 * Explore low-rank updates in the Picard loop to accelerate the steady-state recomputation.
 
+## Remaining Tasks
+
+* Implement the frozen-Jacobian exponential stepper (Schur factorization, cached `exp(hA)`/`φ₁(hA)` actions, defect-weighted accept/reject, and re-basing).
+* Ensure chemistry problems expose `steady_state_generator`/`steady_state_order`, including automatic emission from the JAFF network generator.
+* Wire the defect-based entry/exit logic so VODE can hand control to the departure solver when it stalls and resume full integration once LTE breaks.
+* Pursue the performance polish items (in-place generator refresh, low-rank Picard updates) after the core path lands.
+
+### Exponential Propagator Implementation Steps
+
+1. **State preparation** — Assemble `y_star`, `delta`, `A = J(y_star)`, and `b = f(y_star)` inside a dedicated entry point (e.g., `integrate_departure_step`), and stash the tolerances/defect threshold that gate acceptance.
+2. **Real-Schur factorization** — Factor `A` once per rebase into orthogonal `Q` and quasi-upper-triangular `T`; surface a compact struct that caches `Q`, `T`, and the problem dimension.
+3. **Matrix function cache** — For a proposed macro-step `h`, form `exp_hT` and `phi1_hT` (using scaling-and-squaring or a Padé/Lanczos routine suitable for the small dense `T`). Expose helpers to refresh these when `h` changes.
+4. **Linear-system propagation** — Rotate `delta` and `b` into Schur space (`delta_hat = Q^T delta`, `b_hat = Q^T b`), apply the frozen linear update (`delta_hat_trial = exp_hT * delta_hat + h * phi1_hT * b_hat`), and map back with `Q`.
+5. **Defect evaluation** — Reconstruct `y_trial = y_star + delta_trial`, call the full RHS, and build the weighted defect `r = f(y_trial) - (A delta_trial + b)` using the chemistry tolerances.
+6. **Accept/reject control** — Accept the step when the maximum weighted defect falls below the tolerance, update `delta`, `y`, and time, and consider enlarging `h`; otherwise reduce `h`, recompute the matrix functions, and retry without advancing.
+7. **Rebase triggers** — Monitor `||delta||` and defect trends to decide when the approximation fails; on trigger, exit so the caller can recompute `y_star`, `A`, and `b` before restarting the loop.
+8. **Public API** — Wrap the above in a reusable driver that integrates until either success, rebase request, or exit back to VODE, returning status codes and updated state for seamless handoff.
+
 This departure-based integration path keeps the existing solver infrastructure intact while reusing steady-state Jacobians to drive an exponential propagator through stiff, near-equilibrium phases.

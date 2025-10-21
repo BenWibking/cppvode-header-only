@@ -4,8 +4,10 @@
 #ifndef LINEAR_ALGEBRA_HPP
 #define LINEAR_ALGEBRA_HPP
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include "integrator_types.hpp"
 
@@ -211,6 +213,229 @@ Real norm_inf(const std::array<Real, N>& x) {
         max_val = std::max(max_val, std::abs(x[i]));
     }
     return max_val;
+}
+
+// Matrix helpers used by exponential propagator
+template<size_type N>
+std::array<std::array<Real, N>, N> identity_matrix() {
+    std::array<std::array<Real, N>, N> I{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            I[i][j] = (i == j) ? Real{1.0} : Real{0.0};
+        }
+    }
+    return I;
+}
+
+template<size_type N>
+std::array<std::array<Real, N>, N>
+matrix_add(const std::array<std::array<Real, N>, N>& A,
+           const std::array<std::array<Real, N>, N>& B) {
+    std::array<std::array<Real, N>, N> C{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            C[i][j] = A[i][j] + B[i][j];
+        }
+    }
+    return C;
+}
+
+template<size_type N>
+std::array<std::array<Real, N>, N>
+matrix_sub(const std::array<std::array<Real, N>, N>& A,
+           const std::array<std::array<Real, N>, N>& B) {
+    std::array<std::array<Real, N>, N> C{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            C[i][j] = A[i][j] - B[i][j];
+        }
+    }
+    return C;
+}
+
+template<size_type N>
+std::array<std::array<Real, N>, N>
+matrix_scale(const std::array<std::array<Real, N>, N>& A, Real alpha) {
+    std::array<std::array<Real, N>, N> C{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            C[i][j] = alpha * A[i][j];
+        }
+    }
+    return C;
+}
+
+template<size_type N>
+void matrix_scale_inplace(std::array<std::array<Real, N>, N>& A, Real alpha) {
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            A[i][j] *= alpha;
+        }
+    }
+}
+
+template<size_type N>
+std::array<std::array<Real, N>, N>
+matrix_multiply(const std::array<std::array<Real, N>, N>& A,
+                const std::array<std::array<Real, N>, N>& B) {
+    std::array<std::array<Real, N>, N> C{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            Real sum = 0.0;
+            for (size_type k = 0; k < N; ++k) {
+                sum += A[i][k] * B[k][j];
+            }
+            C[i][j] = sum;
+        }
+    }
+    return C;
+}
+
+template<size_type N>
+Real matrix_norm1(const std::array<std::array<Real, N>, N>& A) {
+    Real max_col_sum = 0.0;
+    for (size_type j = 0; j < N; ++j) {
+        Real col_sum = 0.0;
+        for (size_type i = 0; i < N; ++i) {
+            col_sum += std::abs(A[i][j]);
+        }
+        max_col_sum = std::max(max_col_sum, col_sum);
+    }
+    return max_col_sum;
+}
+
+namespace detail {
+
+template<size_type N>
+void matrix_pade13(const std::array<std::array<Real, N>, N>& A,
+                   std::array<std::array<Real, N>, N>& U,
+                   std::array<std::array<Real, N>, N>& V) {
+    constexpr Real b[] = {
+        64764752532480000.0,
+        32382376266240000.0,
+        7771770303897600.0,
+        1187353796428800.0,
+        129060195264000.0,
+        10559470521600.0,
+        670442572800.0,
+        33522128640.0,
+        1323241920.0,
+        40840800.0,
+        960960.0,
+        16380.0,
+        182.0,
+        1.0
+    };
+
+    const auto A2 = matrix_multiply(A, A);
+    const auto A4 = matrix_multiply(A2, A2);
+    const auto A6 = matrix_multiply(A4, A2);
+    const auto I = identity_matrix<N>();
+
+    auto tmp = matrix_add(matrix_scale(A6, b[13]), matrix_scale(A4, b[11]));
+    tmp = matrix_add(tmp, matrix_scale(A2, b[9]));
+    auto R = matrix_multiply(A6, tmp);
+
+    auto tmp2 = matrix_add(matrix_scale(A6, b[7]), matrix_scale(A4, b[5]));
+    tmp2 = matrix_add(tmp2, matrix_scale(A2, b[3]));
+    tmp2 = matrix_add(tmp2, matrix_scale(I, b[1]));
+    auto inner = matrix_add(R, tmp2);
+    U = matrix_multiply(A, inner);
+
+    auto tmp3 = matrix_add(matrix_scale(A6, b[12]), matrix_scale(A4, b[10]));
+    tmp3 = matrix_add(tmp3, matrix_scale(A2, b[8]));
+    auto term1 = matrix_multiply(A6, tmp3);
+
+    auto tmp4 = matrix_add(matrix_scale(A6, b[6]), matrix_scale(A4, b[4]));
+    tmp4 = matrix_add(tmp4, matrix_scale(A2, b[2]));
+    tmp4 = matrix_add(tmp4, matrix_scale(I, b[0]));
+    V = matrix_add(term1, tmp4);
+}
+
+template<size_type N>
+bool matrix_solve_inplace(std::array<std::array<Real, N>, N>& A,
+                          std::array<std::array<Real, N>, N>& B) {
+    std::array<int, N> ipvt{};
+    int info = lu_decomposition<N>(A, ipvt);
+    if (info != 0) {
+        return false;
+    }
+    for (size_type j = 0; j < N; ++j) {
+        std::array<Real, N> column{};
+        for (size_type i = 0; i < N; ++i) {
+            column[i] = B[i][j];
+        }
+        lu_solve<N>(A, ipvt, column);
+        for (size_type i = 0; i < N; ++i) {
+            B[i][j] = column[i];
+        }
+    }
+    return true;
+}
+
+} // namespace detail
+
+template<size_type N>
+bool matrix_exponential(const std::array<std::array<Real, N>, N>& A,
+                        std::array<std::array<Real, N>, N>& expA) {
+    if constexpr (N == 0) {
+        return true;
+    }
+
+    const Real theta13 = 4.25;
+    auto A_scaled = A;
+    const Real normA = matrix_norm1(A);
+    int s = 0;
+    if (normA > theta13 && std::isfinite(normA)) {
+        s = static_cast<int>(std::ceil(std::log2(normA / theta13)));
+        s = std::max(s, 0);
+        const Real scale = std::ldexp(1.0, -s);
+        matrix_scale_inplace(A_scaled, scale);
+    }
+
+    std::array<std::array<Real, N>, N> U{};
+    std::array<std::array<Real, N>, N> V{};
+    detail::matrix_pade13(A_scaled, U, V);
+
+    auto P = matrix_add(V, U);
+    auto Q = matrix_sub(V, U);
+    auto Q_factor = Q;
+    if (!detail::matrix_solve_inplace(Q_factor, P)) {
+        return false;
+    }
+
+    auto result = P;
+    for (int k = 0; k < s; ++k) {
+        result = matrix_multiply(result, result);
+    }
+    expA = result;
+    return true;
+}
+
+template<size_type N>
+bool matrix_phi1(const std::array<std::array<Real, N>, N>& A,
+                 std::array<std::array<Real, N>, N>& phi1A) {
+    if constexpr (N == 0) {
+        return true;
+    }
+    constexpr size_type M = 2 * N;
+    std::array<std::array<Real, M>, M> block{};
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            block[i][j] = A[i][j];
+        }
+        block[i][N + i] = Real{1.0};
+    }
+    std::array<std::array<Real, M>, M> exp_block{};
+    if (!matrix_exponential<M>(block, exp_block)) {
+        return false;
+    }
+    for (size_type i = 0; i < N; ++i) {
+        for (size_type j = 0; j < N; ++j) {
+            phi1A[i][j] = exp_block[i][N + j];
+        }
+    }
+    return true;
 }
 
 } // namespace linalg

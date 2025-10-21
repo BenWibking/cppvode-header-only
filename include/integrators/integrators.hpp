@@ -9,6 +9,7 @@
 #include "backward_euler.hpp"
 #include "dvodpk.hpp"
 #include "steady_state_gth.hpp"
+#include "steady_state_departure.hpp"
 #include "vode.hpp"
 
 namespace integrators {
