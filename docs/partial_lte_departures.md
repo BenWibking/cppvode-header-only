@@ -74,3 +74,13 @@ Re-use the snap gates to decide acceptance/rejection. Additional exit policies:
 6. **Documentation and examples:** Update this note and add an example (`examples/partial_lte.cpp`) demonstrating selective snapping.
 
 With this blueprint, the partial-LTE controller reuses the simplified snap infrastructure while addressing realistic scenarios where only a handful of species hug steady state.
+
+## Relationship to QSS Methods
+
+The partial snap approach and classical Quasi Steady-State (QSS) integrators both exploit fast/slow separation, but they are not equivalent:
+
+- **Conditional vs. continuous enforcement:** The snap controller only projects the fast block onto steady state when diagnostics pass; QSS rewrites the governing equations so the algebraic constraints hold throughout the integration.
+- **State evolution:** After a snap, the fast species remain fixed until VODE advances again. QSS substitutions keep the fast species evolving continuously alongside the slow block.
+- **Fallback behaviour:** Snap keeps the full stiff ODE system intact and falls back to VODE when the gates reject. QSS typically has no built-in fallback—its accuracy depends on how well the algebraic approximation captures the dynamics.
+
+Think of the partial snap controller as an optional projection layered atop VODE, while QSS produces a reduced system where fast species are eliminated entirely. Keeping that distinction clear helps prevent scope creep when extending the snap infrastructure.
