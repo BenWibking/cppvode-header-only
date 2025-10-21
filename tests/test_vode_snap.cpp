@@ -59,7 +59,7 @@ bool test_initial_snap_success() {
     VODE<SnapProblem> solver;
     VODEState<SnapProblem::neqs> state;
     state.t = 0.0;
-    state.tout = 2.0; // hydro dt large enough to satisfy timescale gate
+    state.tout = 10.0; // hydro dt large enough to satisfy the Gershgorin gate
     state.y = {0.2, 0.8};
     state.rtol = 1.0e-6;
     state.atol = 1.0e-12;

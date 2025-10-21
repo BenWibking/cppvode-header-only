@@ -25,6 +25,8 @@ struct SteadyStateGthConfig {
     bool enforce_generator_structure{true};
     bool verbose{false};
     Real norm_target{std::numeric_limits<Real>::quiet_NaN()};
+    Real constraint_tol{1.0e-12};
+    bool enforce_constraints{true};
 };
 
 enum class SteadyStateStatus {
@@ -32,6 +34,7 @@ enum class SteadyStateStatus {
     GeneratorCheckFailed,
     FactorizationFailure,
     NormalizationFailure,
+    ConstraintFailure,
     MaxIterations
 };
 
@@ -62,6 +65,25 @@ struct has_steady_state_order<
     std::void_t<decltype(Problem::steady_state_order(
         std::declval<std::array<size_type, ProblemTraits<Problem>::neqs>&>()))>> : std::true_type {};
 
+template<typename Problem, typename = void>
+struct has_steady_state_constraints : std::false_type {};
+
+template<typename Problem>
+struct has_steady_state_constraints<
+    Problem,
+    std::void_t<decltype(Problem::steady_state_constraints(
+        std::declval<const typename ProblemTraits<Problem>::state_type&>(),
+        std::declval<std::array<std::array<Real, ProblemTraits<Problem>::neqs>, ProblemTraits<Problem>::neqs>&>()))>>
+    : std::true_type {};
+
+template<typename Problem, typename = void>
+struct has_steady_state_constraint_count : std::false_type {};
+
+template<typename Problem>
+struct has_steady_state_constraint_count<
+    Problem,
+    std::void_t<decltype(Problem::steady_state_constraint_count())>> : std::true_type {};
+
 } // namespace detail
 
 template<typename Problem>
@@ -81,15 +103,133 @@ SteadyStateResult steady_state_gth(typename ProblemTraits<Problem>::state_type& 
 
     SteadyStateResult result;
     Vector y_curr = y;
-    const Real norm_target = std::isfinite(config.norm_target)
-                                 ? config.norm_target
-                                 : std::accumulate(y_curr.begin(), y_curr.end(), Real{0});
+    const Vector y_ref = y_curr;
+
+    const Real inferred_norm = std::accumulate(y_curr.begin(), y_curr.end(), Real{0});
+    const Real norm_target = std::isfinite(config.norm_target) ? config.norm_target : inferred_norm;
 
     if (norm_target <= 0.0) {
         result.status = SteadyStateStatus::NormalizationFailure;
         result.residual = norm_target;
         return result;
     }
+
+    size_type constraint_count = size_type{1};
+    if constexpr (detail::has_steady_state_constraint_count<Problem>::value) {
+        const size_type declared = Problem::steady_state_constraint_count();
+        if (declared > 0) {
+            constraint_count = std::min<size_type>(declared, N);
+        }
+    }
+    constraint_count = std::max<size_type>(constraint_count, size_type{1});
+
+    std::array<std::array<Real, N>, N> constraint_matrix{};
+    for (auto& row : constraint_matrix) {
+        row.fill(Real{0});
+    }
+    constraint_matrix[0].fill(Real{1});
+
+    if constexpr (detail::has_steady_state_constraints<Problem>::value) {
+        Problem::steady_state_constraints(y_ref, constraint_matrix);
+    }
+
+    std::array<Real, N> constraint_rhs{};
+    auto compute_constraint_rhs = [&](const Vector& state) {
+        constraint_rhs.fill(Real{0});
+        for (size_type row = 0; row < constraint_count; ++row) {
+            Real sum = 0.0;
+            for (size_type col = 0; col < N; ++col) {
+                sum += constraint_matrix[row][col] * state[col];
+            }
+            constraint_rhs[row] = sum;
+        }
+    };
+    compute_constraint_rhs(y_ref);
+    if (constraint_count >= 1) {
+        constraint_rhs[0] = norm_target;
+    }
+
+    auto constraint_residual = [&](const Vector& state, std::array<Real, N>& residual) -> Real {
+        residual.fill(Real{0});
+        Real worst = 0.0;
+        for (size_type row = 0; row < constraint_count; ++row) {
+            Real sum = 0.0;
+            for (size_type col = 0; col < N; ++col) {
+                sum += constraint_matrix[row][col] * state[col];
+            }
+            const Real diff = constraint_rhs[row] - sum;
+            residual[row] = diff;
+            worst = std::max(worst, std::abs(diff));
+        }
+        return worst;
+    };
+
+    auto project_to_constraints = [&](Vector& state) -> bool {
+        if (!config.enforce_constraints) {
+            return true;
+        }
+
+        std::array<Real, N> residual{};
+        Real worst = constraint_residual(state, residual);
+        if (worst <= config.constraint_tol) {
+            return true;
+        }
+
+        std::array<std::array<Real, N>, N> gram{};
+        for (size_type i = 0; i < N; ++i) {
+            gram[i].fill(Real{0});
+            gram[i][i] = Real{1};
+        }
+        for (size_type i = 0; i < constraint_count; ++i) {
+            for (size_type j = 0; j < constraint_count; ++j) {
+                Real sum = 0.0;
+                for (size_type col = 0; col < N; ++col) {
+                    sum += constraint_matrix[i][col] * constraint_matrix[j][col];
+                }
+                gram[i][j] = sum;
+            }
+        }
+
+        std::array<int, N> ipvt{};
+        auto gram_factor = gram;
+        const int info = linalg::lu_decomposition<N>(gram_factor, ipvt);
+        if (info != 0) {
+            return false;
+        }
+
+        std::array<Real, N> lambda{};
+        lambda.fill(Real{0});
+        for (size_type i = 0; i < constraint_count; ++i) {
+            lambda[i] = residual[i];
+        }
+
+        linalg::lu_solve<N>(gram_factor, ipvt, lambda);
+
+        Vector correction{};
+        correction.fill(Real{0});
+        for (size_type row = 0; row < constraint_count; ++row) {
+            const Real lambda_row = lambda[row];
+            if (lambda_row == Real{0}) {
+                continue;
+            }
+            for (size_type col = 0; col < N; ++col) {
+                correction[col] += constraint_matrix[row][col] * lambda_row;
+            }
+        }
+
+        for (size_type i = 0; i < N; ++i) {
+            state[i] += correction[i];
+            if (state[i] < -config.constraint_tol) {
+                return false;
+            }
+            if (state[i] < Real{0} && state[i] > -config.constraint_tol) {
+                state[i] = Real{0};
+            }
+        }
+
+        worst = constraint_residual(state, residual);
+        return worst <= config.constraint_tol;
+    };
 
     std::array<size_type, N> order{};
     std::iota(order.begin(), order.end(), size_type{0});
@@ -159,6 +299,12 @@ SteadyStateResult steady_state_gth(typename ProblemTraits<Problem>::state_type& 
         Vector y_next{};
         for (size_type i = 0; i < N; ++i) {
             y_next[order[i]] = y_perm[i];
+        }
+
+        if (!project_to_constraints(y_next)) {
+            result.status = SteadyStateStatus::ConstraintFailure;
+            result.residual = std::numeric_limits<Real>::infinity();
+            return result;
         }
 
         Real max_rel_change = 0.0;

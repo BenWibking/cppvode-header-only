@@ -3,9 +3,12 @@
 #ifndef INTEGRATORS_STEADY_STATE_DEPARTURE_HPP
 #define INTEGRATORS_STEADY_STATE_DEPARTURE_HPP
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <tuple>
 
 #include "integrator_types.hpp"
 #include "steady_state_gth.hpp"
@@ -20,6 +23,7 @@ struct SteadyStateSnapConfig {
     Real min_diagonal{1.0e-30};
     Real max_departure_tolerance{std::numeric_limits<Real>::infinity()};
     Real departure_floor{1.0e-30};
+    Real symmetrization_floor{1.0e-30};
 };
 
 enum class SteadyStateSnapResult {
@@ -32,6 +36,7 @@ struct SteadyStateSnapOutcome {
     SteadyStateSnapResult result{SteadyStateSnapResult::FallbackToVode};
     Real max_balance_mismatch{std::numeric_limits<Real>::infinity()};
     Real max_timescale{std::numeric_limits<Real>::infinity()};
+    Real worst_gershgorin_edge{std::numeric_limits<Real>::infinity()};
     Real max_weighted_departure{std::numeric_limits<Real>::infinity()};
 };
 
@@ -71,19 +76,60 @@ inline Real max_balance_mismatch(const Matrix& generator,
     return worst;
 }
 
-template<typename Matrix>
-inline Real max_relaxation_timescale(const Matrix& generator, Real min_diagonal) {
-    Real worst = 0.0;
-    const size_type N = generator.size();
+template<typename Matrix, typename State>
+inline Real gershgorin_relaxation_timescale(const Matrix& generator,
+                                            const State& y_star,
+                                            size_type nullity,
+                                            Real min_diagonal,
+                                            Real sym_floor,
+                                            Real& worst_edge) {
+    constexpr size_type N = std::tuple_size_v<State>;
+    std::array<Real, N> edges{};
+
     for (size_type i = 0; i < N; ++i) {
         const Real diag = generator[i][i];
         if (!(diag > min_diagonal)) {
+            worst_edge = std::numeric_limits<Real>::infinity();
             return std::numeric_limits<Real>::infinity();
         }
-        const Real tau = Real{1} / diag;
-        worst = std::max(worst, tau);
+        const Real weight_i = std::sqrt(std::max(y_star[i], sym_floor));
+        if (!(weight_i > Real{0})) {
+            worst_edge = std::numeric_limits<Real>::infinity();
+            return std::numeric_limits<Real>::infinity();
+        }
+        Real radius = 0.0;
+        for (size_type j = 0; j < N; ++j) {
+            if (i == j) {
+                continue;
+            }
+            const Real val = -generator[i][j];
+            if (val == Real{0}) {
+                continue;
+            }
+            const Real weight_j = std::sqrt(std::max(y_star[j], sym_floor));
+            if (!(weight_j > Real{0})) {
+                worst_edge = std::numeric_limits<Real>::infinity();
+                return std::numeric_limits<Real>::infinity();
+            }
+            const Real sym_val = val * (weight_i / weight_j);
+            radius += std::abs(sym_val);
+        }
+        const Real diag_sym = -generator[i][i];
+        edges[i] = diag_sym + radius;
     }
-    return worst;
+
+    std::array<Real, N> sorted = edges;
+    std::sort(sorted.begin(), sorted.end(), std::greater<Real>());
+    const size_type skip = std::min(nullity, static_cast<size_type>(N));
+    if (skip >= N) {
+        worst_edge = -std::numeric_limits<Real>::infinity();
+        return Real{0};
+    }
+    worst_edge = sorted[skip];
+    if (!(worst_edge < Real{0})) {
+        return std::numeric_limits<Real>::infinity();
+    }
+    return -Real{1} / worst_edge;
 }
 
 } // namespace detail
@@ -100,7 +146,15 @@ SteadyStateSnapOutcome attempt_steady_state_snap(
 
     using Traits = ProblemTraits<Problem>;
     using State = typename Traits::state_type;
-    using Matrix = typename Traits::jacobian_type;
+   using Matrix = typename Traits::jacobian_type;
+
+    size_type nullity = size_type{1};
+    if constexpr (detail::has_steady_state_constraint_count<Problem>::value) {
+        const size_type declared = Problem::steady_state_constraint_count();
+        if (declared > 0) {
+            nullity = std::min<size_type>(declared, Traits::neqs);
+        }
+    }
 
     SteadyStateSnapOutcome outcome{};
 
@@ -119,8 +173,12 @@ SteadyStateSnapOutcome attempt_steady_state_snap(
     outcome.max_balance_mismatch = detail::max_balance_mismatch(generator,
                                                                 y_star,
                                                                 config.balance_floor);
-    outcome.max_timescale = detail::max_relaxation_timescale(generator,
-                                                             config.min_diagonal);
+    outcome.max_timescale = detail::gershgorin_relaxation_timescale(generator,
+                                                                    y_star,
+                                                                    nullity,
+                                                                    config.min_diagonal,
+                                                                    config.symmetrization_floor,
+                                                                    outcome.worst_gershgorin_edge);
     outcome.max_weighted_departure = detail::max_weighted_departure(y,
                                                                     y_star,
                                                                     atol,

@@ -76,6 +76,7 @@ struct VODEState : public IntegratorState<N> {
     Real steady_state_snap_min_diagonal{1.0e-30};
     Real steady_state_snap_max_departure_tolerance{std::numeric_limits<Real>::infinity()};
     Real steady_state_snap_departure_floor{1.0e-30};
+    Real steady_state_snap_symmetrization_floor{1.0e-30};
 
     // Coefficients and arrays (1-based in algorithm; we map i->i-1)
     std::array<Real, VODE_LMAX> el{};   // 1..L
@@ -151,6 +152,7 @@ private:
             cfg.min_diagonal = s.steady_state_snap_min_diagonal;
             cfg.max_departure_tolerance = s.steady_state_snap_max_departure_tolerance;
             cfg.departure_floor = s.steady_state_snap_departure_floor;
+            cfg.symmetrization_floor = s.steady_state_snap_symmetrization_floor;
             Real norm_target = std::accumulate(candidate.begin(), candidate.end(), Real{0});
             if (!(norm_target > Real{0})) {
                 norm_target = Real{1};

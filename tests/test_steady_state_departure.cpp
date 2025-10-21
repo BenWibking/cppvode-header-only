@@ -112,9 +112,11 @@ bool test_snap_success() {
 
     std::cout << "  result=" << static_cast<int>(outcome.result)
               << " max_balance=" << outcome.max_balance_mismatch
-              << " max_tau=" << outcome.max_timescale << "\n";
+              << " max_tau=" << outcome.max_timescale
+              << " g_edge=" << outcome.worst_gershgorin_edge << "\n";
 
     return outcome.result == SteadyStateSnapResult::Snapped &&
+           outcome.worst_gershgorin_edge < 0.0 &&
            is_close<TwoStateProblem>(y, y_star, 1.0e-12);
 }
 
@@ -171,7 +173,8 @@ bool test_fallback_due_to_timescale() {
         0.0, y, atol, rtol, 0.01, true, config);
 
     std::cout << "  result=" << static_cast<int>(outcome.result)
-              << " max_tau=" << outcome.max_timescale << "\n";
+              << " max_tau=" << outcome.max_timescale
+              << " g_edge=" << outcome.worst_gershgorin_edge << "\n";
 
     const Real threshold = config.timescale_safety * 0.01;
     return outcome.result == SteadyStateSnapResult::FallbackToVode &&

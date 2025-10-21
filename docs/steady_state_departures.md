@@ -18,6 +18,7 @@ This note records the gating logic, configuration knobs, and integration points 
 
 2. **Solve for `y*` using GTH**
    * Call `steady_state_gth<Problem>(y_guess, config)` with the current composition as the initial guess. Problems must expose `steady_state_generator(state, matrix)` and may supply a permutation via `steady_state_order(order)`.
+   * Optionally provide conservation rows through `Problem::steady_state_constraints(y_guess, matrix)`. The solver applies each row to the incoming state to capture the caller’s budgets (nucleon number, charge, etc.) and enforces those invariants throughout the iteration.
    * If the steady-state solve fails, immediately fall back to VODE (or abort if VODE has already failed).
 
 3. **Evaluate detailed balance from the generator**
@@ -25,9 +26,13 @@ This note records the gating logic, configuration knobs, and integration points 
    * For every unordered pair `(i, j)`, compare the forward and backward fluxes `φ_{i→j} = y*_i · (−generator[i][j])` and `φ_{j→i} = y*_j · (−generator[j][i])`. The helper declares detailed balance satisfied when  
      `|φ_{i→j} − φ_{j→i}| / (ε + max(φ_{i→j}, φ_{j→i})) ≤ balance_tolerance`.
 
-4. **Check reaction timescales against the hydro step**
-   * Interpret the diagonal entries as outflow rates: `τ_i = 1 / generator[i][i]`. The snap is allowed only if `max_i τ_i ≤ timescale_safety · dt_hydro`, ensuring chemistry relaxes much faster than the transport driver.
-   * Species with vanishing outflow (diagonal below `min_diagonal`) force a fallback.
+4. **Check reaction timescales with a Gershgorin bound**
+   * Interpret the generator as a reversible Markov operator once detailed balance holds. Form the symmetrized matrix `S = D^{1/2} (-generator) D^{-1/2}`, where `D = diag(y*)`, so `S` is symmetric negative semidefinite and shares the non-zero eigenvalues with `-generator`.
+   * Let `ν` denote the rank of the conserved subspace (e.g., mass and charge constraints). Problems inform the helper via `Problem::steady_state_constraint_count()`; by default `ν = 1` for the mass-fraction null mode.
+   * For every row `i`, compute the Gershgorin right edge `g_i = S_{ii} + Σ_{j ≠ i} |S_{ij}|`. Sort these edges in descending order and discard the largest `ν` entries, which cover the zero eigenvalues associated with conservation laws.
+   * Define `g_max` as the largest remaining edge (reported as `worst_gershgorin_edge` in the outcome diagnostics). The snap is allowed only if  
+     `g_max ≤ -1 / (timescale_safety · dt_hydro)`, ensuring all dissipative modes decay at least as fast as the hydro driver.
+   * Rows whose diagonal magnitude falls below `min_diagonal` still force an immediate fallback; they indicate an ill-conditioned steady state irrespective of the Gershgorin bound.
 
 5. **Optional departure bound**
    * The helper reports the max weighted difference between the current state and `y*` (`|y_i − y*_i| / (atol_i + rtol_i · max(|y_i|, |y*_i|))`). By default this metric is informational; set `max_departure_tolerance` to a finite value to enforce a hard cap on the snap distance.
@@ -49,7 +54,11 @@ struct SteadyStateSnapConfig {
     Real min_diagonal{1.0e-30};
     Real max_departure_tolerance{std::numeric_limits<Real>::infinity()};
     Real departure_floor{1.0e-30};
+    Real symmetrization_floor{1.0e-30};
 };
+
+// SteadyStateGthConfig (embedded above) additionally exposes constraint_tol (default 1e-12)
+// and enforce_constraints, which toggles the projection step during debugging.
 
 enum class SteadyStateSnapResult { Snapped, FallbackToVode, Failure };
 
@@ -97,6 +106,15 @@ case SteadyStateSnapResult::Failure:
 
 The `VODEState` structure exposes these tuning knobs directly: set `steady_state_snap_enabled` to disable the shortcut entirely, or adjust `steady_state_snap_balance_tolerance`, `steady_state_snap_timescale_safety`, and the other snap parameters before invoking `integrate`.
 
+Problems that conserve more than one independent quantity should override `Problem::steady_state_constraint_count()` so the Gershgorin filter ignores the corresponding number of null modes when it evaluates the timescale gate.
+
+### Injecting conservation laws into the steady-state solve
+
+1. `Problem::steady_state_constraints(y_ref, matrix)` fills a dense matrix whose rows encode conserved quantities (e.g., total nucleons, net charge); the solver prepends the mass-fraction row automatically. Omit the hook to recover the current mass-only behaviour.
+2. The helper derives the target budgets by applying each row to the incoming state `y_ref`, so every snap shares the caller’s invariants without needing extra plumbing for the right-hand side.
+3. After each GTH iteration the solver projects the candidate state back onto the constraint manifold with a small least-squares solve and clamps any tiny negative entries to zero. Projection failures (e.g., singular constraint Gram matrix or large negative excursions) surface via `SteadyStateStatus::ConstraintFailure`.
+4. `SteadyStateGthConfig` exposes `constraint_tol` to control the acceptable violation before projection and reuses the existing `enforce_constraints` flag to toggle the correction pass when debugging.
+
 ## Generator Synthesis
 
 For automatically generated chemistry problems, reuse the symbolic Jacobian machinery to emit `steady_state_generator`. With stoichiometric matrices `ν⁻` and `ν⁺` and reaction rates `k_r(y)`:
@@ -110,8 +128,9 @@ These functions live alongside the RHS and Jacobian in generated headers so both
 ## Transition Criteria Summary
 
 * **Attempt snap** when VODE reports repeated failures or diagnostics flag near-LTE behavior.
-* **Snap accepted** when detailed balance mismatches drop below `balance_tolerance`, maximum relaxation time is under `timescale_safety · dt_hydro`, and (if configured) the weighted departure stays within `max_departure_tolerance`.
+* **Snap accepted** when detailed balance mismatches drop below `balance_tolerance`, the Gershgorin bound guarantees every dissipative eigenmode decays faster than `timescale_safety · dt_hydro`, and (if configured) the weighted departure stays within `max_departure_tolerance`.
 * **Fallback** when the snap gate rejects but VODE still has a chance to succeed.
 * **Failure** when both VODE and the snap path are exhausted, signalling the caller to reduce the hydro timestep or inspect the chemistry network.
+* **Conservation respected** because the constrained GTH solve anchors the snapped state to the caller’s nucleon and charge budgets before overwriting the integrator state.
 
 The helper keeps the LTE shortcut aligned with the robust GTH steady-state solve while avoiding the maintenance overhead of a dedicated departure integrator.
