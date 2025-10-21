@@ -176,7 +176,7 @@ A complementary change is planned for the JAFF network generator so that the C++
 
 ### Exponential Propagator Implementation Steps
 
-1. **State preparation** — Assemble `y_star`, `delta`, `A = J(y_star)`, and `b = f(y_star)` inside a dedicated entry point (e.g., `integrate_departure_step`), and stash the tolerances/defect threshold that gate acceptance.
+1. **State preparation** — Solve the full nonlinear steady-state problem with `steady_state_gth` to obtain `y_star` satisfying `f(y_star) = 0`, then assemble `delta`, `A = J(y_star)`, and `b = f(y_star)` inside a dedicated entry point (e.g., `integrate_departure_step`), and stash the tolerances/defect threshold that gate acceptance.
 2. **Real-Schur factorization** — Factor `A` once per rebase into orthogonal `Q` and quasi-upper-triangular `T`; surface a compact struct that caches `Q`, `T`, and the problem dimension.
 3. **Matrix function cache** — For a proposed macro-step `h`, form `exp_hT` and `phi1_hT` (using scaling-and-squaring or a Padé/Lanczos routine suitable for the small dense `T`). Expose helpers to refresh these when `h` changes.
 4. **Linear-system propagation** — Rotate `delta` and `b` into Schur space (`delta_hat = Q^T delta`, `b_hat = Q^T b`), apply the frozen linear update (`delta_hat_trial = exp_hT * delta_hat + h * phi1_hT * b_hat`), and map back with `Q`.
