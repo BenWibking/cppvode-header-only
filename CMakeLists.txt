@@ -7,15 +7,19 @@ project(HeaderOnlyIntegrators
     DESCRIPTION "Header-only ODE integrator library extracted from AMReX Microphysics"
     LANGUAGES CXX Fortran)
 
+option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+
 # Optionally enable CUDA if a compiler is available (for GPU tests)
 include(CheckLanguage)
 check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
+if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
     # Suppress host compiler pedantic warnings when compiling CUDA sources
     # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
     add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
+elseif(BUILD_CUDA_TESTS)
+    message(WARNING "BUILD_CUDA_TESTS=ON but no CUDA compiler detected; GPU tests will be skipped")
 endif()
 
 # Set C++ standard
@@ -41,11 +45,6 @@ endif()
 
 # Treat warnings as errors (opt-in, excludes CUDA/Fortran)
 option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortran)" OFF)
-
-option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
-if(BUILD_CUDA_TESTS)
-    enable_language(CUDA)
-endif()
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

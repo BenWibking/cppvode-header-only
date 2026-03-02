@@ -24,6 +24,11 @@ add_executable(test_vode_nelson test_vode_nelson.cpp)
 target_link_libraries(test_vode_nelson PRIVATE integrators)
 add_test(NAME vode_nelson_test COMMAND test_vode_nelson)
 
+# Strict Robertson convergence/self-consistency test
+add_executable(test_vode_robertson_strict test_vode_robertson_strict.cpp)
+target_link_libraries(test_vode_robertson_strict PRIVATE integrators)
+add_test(NAME vode_robertson_strict_test COMMAND test_vode_robertson_strict)
+
 # Linear invariants conservation with VODE
 add_executable(test_vode_linear_invariants test_vode_linear_invariants.cpp)
 target_link_libraries(test_vode_linear_invariants PRIVATE integrators)
@@ -34,8 +39,23 @@ add_executable(test_vode_linear_invariants_numjac test_vode_linear_invariants_nu
 target_link_libraries(test_vode_linear_invariants_numjac PRIVATE integrators)
 add_test(NAME vode_linear_invariants_numjac_test COMMAND test_vode_linear_invariants_numjac)
 
-# GPU test (requires CUDA)
-if(CMAKE_CUDA_COMPILER)
+# Backward Euler numerical correctness regressions
+add_executable(test_backward_euler_regressions test_backward_euler_regressions.cpp)
+target_link_libraries(test_backward_euler_regressions PRIVATE integrators)
+add_test(NAME backward_euler_regressions_test COMMAND test_backward_euler_regressions)
+
+# Optional Jacobian API contract regression
+add_executable(test_optional_jacobian test_optional_jacobian.cpp)
+target_link_libraries(test_optional_jacobian PRIVATE integrators)
+add_test(NAME optional_jacobian_test COMMAND test_optional_jacobian)
+
+# VODE Jacobian accounting regression
+add_executable(test_vode_jacobian_counter test_vode_jacobian_counter.cpp)
+target_link_libraries(test_vode_jacobian_counter PRIVATE integrators)
+add_test(NAME vode_jacobian_counter_test COMMAND test_vode_jacobian_counter)
+
+# GPU test (requires CUDA and explicit opt-in)
+if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
     add_executable(test_vode_gpu test_vode_gpu.cu)
 
     # Choose the highest CUDA C++ standard supported; fall back to C++17 if CUDA20 isn't available.

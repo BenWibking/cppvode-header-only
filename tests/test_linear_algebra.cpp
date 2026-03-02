@@ -52,6 +52,42 @@ void test_matrix_solve() {
     std::cout << "  Matrix solve: PASSED\n";
 }
 
+void test_matrix_solve_regression() {
+    std::cout << "Testing LU solve regression case...\n";
+
+    std::array<std::array<Real, 3>, 3> A = {{
+        {{0.96181280249950907, 0.95268950339467517, -0.74900493855137884}},
+        {{0.53100510298151371, 1.0717186887085923, -0.85952813616124646}},
+        {{-0.57964266413365473, 0.32320129774529782, 2.4022762414188135}}
+    }};
+    std::array<Real, 3> b = {
+        -0.040791658492035136,
+        -0.59652843561031799,
+        1.2119314898967246
+    };
+    std::array<Real, 3> x_true = {
+        0.97497543198967151,
+        -0.40292336836364195,
+        0.79395290575768396
+    };
+
+    std::array<int, 3> pivot;
+    int info = linalg::lu_decomposition<3, true>(A, pivot);
+    assert(info == 0);
+    (void)info;
+
+    linalg::lu_solve<3, true>(A, pivot, b);
+
+    Real max_abs_error = 0.0;
+    for (size_type i = 0; i < 3; ++i) {
+        max_abs_error = std::max(max_abs_error, std::abs(b[i] - x_true[i]));
+    }
+    assert(max_abs_error < 1.e-12);
+    (void)max_abs_error;
+
+    std::cout << "  LU solve regression: PASSED\n";
+}
+
 void test_vector_norms() {
     std::cout << "Testing vector norms...\n";
     
@@ -94,6 +130,7 @@ int main() {
     
     test_lu_decomposition();
     test_matrix_solve();
+    test_matrix_solve_regression();
     test_vector_norms();
     test_matrix_vector();
     

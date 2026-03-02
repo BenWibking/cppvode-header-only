@@ -52,6 +52,18 @@ struct problem_preconditioner<Problem, std::void_t<typename Problem::preconditio
     static constexpr bool available = true;
 };
 
+template<typename Problem, size_type N, typename = void>
+struct problem_jacobian {
+    using type = std::array<std::array<Real, N>, N>;
+    static constexpr bool available = false;
+};
+
+template<typename Problem, size_type N>
+struct problem_jacobian<Problem, N, std::void_t<typename Problem::jacobian_type>> {
+    using type = typename Problem::jacobian_type;
+    static constexpr bool available = true;
+};
+
 } // namespace detail
 
 // Base traits for problem definition
@@ -60,9 +72,10 @@ struct ProblemTraits {
     static constexpr size_type neqs = Problem::neqs;
     using state_type = typename Problem::state_type;
     using rhs_type = typename Problem::rhs_type;
-    using jacobian_type = typename Problem::jacobian_type;
+    using jacobian_type = typename detail::problem_jacobian<Problem, neqs>::type;
     using preconditioner_type = typename detail::problem_preconditioner<Problem>::type;
     static constexpr bool has_custom_preconditioner = detail::problem_preconditioner<Problem>::available;
+    static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
 };
 
 // Base integrator state
@@ -103,7 +116,7 @@ concept RHSFunction = requires(const typename Problem::state_type& state,
 // Jacobian function interface
 template<typename Problem>
 concept JacobianFunction = requires(const typename Problem::state_type& state,
-                                    typename Problem::jacobian_type& jac,
+                                    typename ProblemTraits<Problem>::jacobian_type& jac,
                                     Real t) {
     Problem::jacobian(t, state, jac);
 };

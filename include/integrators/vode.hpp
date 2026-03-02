@@ -193,15 +193,20 @@ private:
     // dvjac: build and factor P = I - h*rl1*J
     static void dvjac(State& s) {
         // Build Jacobian J
-        if (s.jacobian_analytic) {
-            if (s.n_step == 1 && !s.debug_dump_done) {
-                if constexpr (N >= 3) {
-                    VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
-                    VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
+        if (s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian) {
+            if constexpr (ProblemTraits<Problem>::has_analytic_jacobian) {
+                if (s.n_step == 1 && !s.debug_dump_done) {
+                    if constexpr (N >= 3) {
+                        VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
+                        VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
+                    }
                 }
+                jacobian(s.tn, s.y, s.jacobian);
             }
-            jacobian(s.tn, s.y, s.jacobian);
         } else {
+            if (s.jacobian_analytic && !ProblemTraits<Problem>::has_analytic_jacobian) {
+                s.jacobian_analytic = false;
+            }
             // Numerical Jacobian using EWT-based step sizes
             Real fac = 0.0;
             for (size_type i = 0; i < N; ++i) fac += (s.savf[i] * s.ewt[i]) * (s.savf[i] * s.ewt[i]);
@@ -223,6 +228,7 @@ private:
             }
             s.n_rhs += static_cast<int>(N);
         }
+        s.n_jac += 1;
 
         // Form P = I - h*rl1*J and factor
         const Real hrl1 = s.H * s.RL1;
