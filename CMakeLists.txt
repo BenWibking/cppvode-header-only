@@ -49,7 +49,7 @@ option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortra
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(integrators INTERFACE
-        -Wall -Wextra -Wpedantic -O3
+        -Wall -Wextra -Wpedantic
         $<$<CONFIG:Debug>:-g -O0 -fsanitize=address>
     )
     if(WARNINGS_AS_ERRORS)
