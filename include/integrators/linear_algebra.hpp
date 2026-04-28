@@ -19,36 +19,64 @@ namespace linalg {
 template<size_type N, bool AllowPivoting = true>
 int lu_decomposition(std::array<std::array<Real, N>, N>& A,
                      std::array<int, N>& ipvt) {
-    for (size_type k = 0; k < N; ++k) {
-        size_type pivot_row = k;
-        if constexpr (AllowPivoting) {
-            Real max_val = std::abs(A[k][k]);
-            for (size_type i = k + 1; i < N; ++i) {
-                Real val = std::abs(A[i][k]);
-                if (val > max_val) {
-                    max_val = val;
-                    pivot_row = i;
+    int info = 0;
+
+    if constexpr (N > 1) {
+        for (size_type k = 0; k < N - 1; ++k) {
+            size_type pivot_row = k;
+            if constexpr (AllowPivoting) {
+                Real max_val = std::abs(A[k][k]);
+                for (size_type i = k + 1; i < N; ++i) {
+                    const Real val = std::abs(A[i][k]);
+                    if (val > max_val) {
+                        max_val = val;
+                        pivot_row = i;
+                    }
                 }
+                ipvt[k] = static_cast<int>(pivot_row);
+            } else {
+                ipvt[k] = static_cast<int>(k);
             }
-        }
 
-        ipvt[k] = static_cast<int>(pivot_row);
-        if (pivot_row != k) {
-            std::swap(A[k], A[pivot_row]);
-        }
+            if (A[pivot_row][k] != 0.0) {
+                if constexpr (AllowPivoting) {
+                    if (pivot_row != k) {
+                        std::swap(A[pivot_row][k], A[k][k]);
+                    }
+                }
 
-        if (std::abs(A[k][k]) < math::UROUND) {
-            return static_cast<int>(k + 1);
-        }
+                const Real multiplier = -1.0 / A[k][k];
+                for (size_type i = k + 1; i < N; ++i) {
+                    A[i][k] *= multiplier;
+                }
 
-        for (size_type i = k + 1; i < N; ++i) {
-            A[i][k] /= A[k][k];
-            for (size_type j = k + 1; j < N; ++j) {
-                A[i][j] -= A[i][k] * A[k][j];
+                for (size_type j = k + 1; j < N; ++j) {
+                    Real t = A[pivot_row][j];
+                    if constexpr (AllowPivoting) {
+                        if (pivot_row != k) {
+                            A[pivot_row][j] = A[k][j];
+                            A[k][j] = t;
+                        }
+                    }
+
+                    for (size_type i = k + 1; i < N; ++i) {
+                        A[i][j] += t * A[i][k];
+                    }
+                }
+            } else {
+                info = static_cast<int>(k + 1);
             }
         }
     }
-    return 0;
+
+    if constexpr (N > 0) {
+        ipvt[N - 1] = static_cast<int>(N - 1);
+        if (A[N - 1][N - 1] == 0.0) {
+            info = static_cast<int>(N);
+        }
+    }
+
+    return info;
 }
 
 // Solve Ax = b given LU and ipvt from lu_decomposition.
@@ -56,28 +84,33 @@ template<size_type N, bool AllowPivoting = true>
 void lu_solve(const std::array<std::array<Real, N>, N>& LU,
               const std::array<int, N>& ipvt,
               std::array<Real, N>& x) {
-    if constexpr (AllowPivoting) {
-        for (size_type k = 0; k < N; ++k) {
-            const int pk = ipvt[k];
-            if (pk != static_cast<int>(k)) {
-                std::swap(x[k], x[static_cast<size_type>(pk)]);
+    if constexpr (N > 1) {
+        for (size_type k = 0; k < N - 1; ++k) {
+            Real t{};
+            if constexpr (AllowPivoting) {
+                const auto pivot_row = static_cast<size_type>(ipvt[k]);
+                t = x[pivot_row];
+                if (pivot_row != k) {
+                    x[pivot_row] = x[k];
+                    x[k] = t;
+                }
+            } else {
+                t = x[k];
+            }
+
+            for (size_type j = k + 1; j < N; ++j) {
+                x[j] += t * LU[j][k];
             }
         }
     }
 
-    // Forward solve: L y = P b (L has unit diagonal).
-    for (size_type i = 0; i < N; ++i) {
-        for (size_type j = 0; j < i; ++j) {
-            x[i] -= LU[i][j] * x[j];
+    for (size_type kb = 0; kb < N; ++kb) {
+        const size_type k = N - 1 - kb;
+        x[k] /= LU[k][k];
+        const Real t = -x[k];
+        for (size_type j = 0; j < k; ++j) {
+            x[j] += t * LU[j][k];
         }
-    }
-
-    // Backward solve: U x = y.
-    for (int i = static_cast<int>(N) - 1; i >= 0; --i) {
-        for (size_type j = static_cast<size_type>(i) + 1; j < N; ++j) {
-            x[static_cast<size_type>(i)] -= LU[static_cast<size_type>(i)][j] * x[j];
-        }
-        x[static_cast<size_type>(i)] /= LU[static_cast<size_type>(i)][static_cast<size_type>(i)];
     }
 }
 

@@ -44,6 +44,11 @@ add_executable(test_backward_euler_regressions test_backward_euler_regressions.c
 target_link_libraries(test_backward_euler_regressions PRIVATE integrators)
 add_test(NAME backward_euler_regressions_test COMMAND test_backward_euler_regressions)
 
+# Khokhlov YASS integrator
+add_executable(test_yass test_yass.cpp)
+target_link_libraries(test_yass PRIVATE integrators)
+add_test(NAME yass_test COMMAND test_yass)
+
 # Optional Jacobian API contract regression
 add_executable(test_optional_jacobian test_optional_jacobian.cpp)
 target_link_libraries(test_optional_jacobian PRIVATE integrators)
