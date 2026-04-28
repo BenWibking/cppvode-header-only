@@ -1,9 +1,10 @@
 # cppvode-header-only
 
-A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides two robust integrators suitable for scientific computing applications:
+A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides robust integrators suitable for scientific computing applications:
 
 - **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF)
 - **Backward Euler**: Simple implicit first-order method
+- **YASS**: Khokhlov's non-iterative first-order stiff method using one RHS/Jacobian point per step
 
 ## Features
 
@@ -101,16 +102,18 @@ include/integrators/          # Header-only library (public API)
 ├── integrator_types.hpp      # Core types, traits, states
 ├── linear_algebra.hpp        # Linear algebra utilities (LU/solve, helpers)
 ├── backward_euler.hpp        # Backward Euler integrator
+├── yass.hpp                  # Khokhlov YASS integrator
 └── vode.hpp                  # VODE (BDF) integrator
 
 examples/                     # Example programs
-├── simple_ode.cpp            # dy/dt = -y demo (BE + VODE)
+├── simple_ode.cpp            # dy/dt = -y demo (BE + YASS + VODE)
 ├── robertson.cpp             # Robertson stiff kinetics (VODE)
 └── robertson_dvode.f90       # Fortran driver to compare with DVODE
 
 tests/                        # Executable tests (run via ctest)
 ├── test_linear_algebra.cpp   # Linear algebra unit tests
 ├── test_convergence.cpp      # BE and VODE convergence/error-control
+├── test_yass.cpp             # YASS step, invariant, and fallback tests
 ├── test_vode_stiff_decay.cpp # Stiff decay regression
 ├── test_vode_hires.cpp       # HIRES stiff benchmark
 ├── test_vode_nelson.cpp      # Nelson astrochemistry check

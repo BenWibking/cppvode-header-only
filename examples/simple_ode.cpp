@@ -81,6 +81,17 @@ int main() {
         }
     }
     
+    // Test YASS
+    {
+        auto integrator = YASS<SimpleDecay>{};
+        auto state = YASSState<1>{};
+        state.jacobian_analytic = true;
+        state.dt = 0.1;  // Set initial timestep to enable adaptive stepping
+        if (!test_integrator("YASS", integrator, state)) {
+            failed_tests++;
+        }
+    }
+    
     // Test VODE
     {
         auto integrator = VODE<SimpleDecay>{};

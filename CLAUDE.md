@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. The library provides two robust integrators:
+This is a modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. The library provides three robust integrators:
 
 - **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF) - recommended for most problems
 - **Backward Euler**: Simple implicit first-order method for very stiff problems
+- **YASS**: Khokhlov's non-iterative first-order stiff method using one RHS/Jacobian point per step
 
 The library is completely self-contained with no external dependencies beyond the standard library.
 
@@ -65,6 +66,7 @@ The library follows a modular header-only design:
 - `integrator_types.hpp`: Core types, concepts, and mathematical utilities
 - `linear_algebra.hpp`: Matrix operations and linear solvers (LU decomposition, etc.)
 - `backward_euler.hpp`: First-order implicit integrator implementation
+- `yass.hpp`: Non-iterative YASS stiff integrator implementation
 - `vode.hpp`: Variable-order BDF integrator (main production solver)
 - `integrators.hpp`: Main include file with factory patterns and convenience aliases
 
@@ -88,6 +90,7 @@ struct YourProblem {
 ### Integrator State Management
 Each integrator uses its own state structure:
 - `BackwardEulerState<N>`: Simple state for Backward Euler
+- `YASSState<N>`: Simple state for YASS
 - `VODEState<N>`: Complex adaptive state with order/step control for VODE
 
 ### Modern C++ Features
@@ -120,11 +123,12 @@ The repository includes `dvode.f` and `robertson_dvode.f90` for:
 ### Unit Tests
 - `test_linear_algebra.cpp`: Matrix operations and LU solver validation
 - `test_convergence.cpp`: Convergence order verification for both integrators
+- `test_yass.cpp`: YASS one-step behavior, invariant preservation, and Jacobian fallback
 - `test_vode_stiff_decay.cpp`: VODE-specific stiff problem tests
 - `test_vode_robertson_strict.cpp`: Strict Robertson problem validation
 
 ### Example Programs
-- `simple_ode.cpp`: Basic exponential decay problem
+- `simple_ode.cpp`: Basic exponential decay problem with BE, YASS, and VODE
 - `robertson.cpp`: Stiff chemical kinetics (Robertson problem)
 - `robertson_dvode.f90`: Fortran reference implementation
 
