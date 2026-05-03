@@ -30,7 +30,7 @@ public:
     
 private:
     // Take a single implicit step
-    IntegratorResult single_step(ProblemState& problem_state, State& state, Real dt) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult single_step(ProblemState& problem_state, State& state, Real dt) {
         std::array<Real, N> y_old = state.y;
         std::array<Real, N> rhs_val{};
         
@@ -80,21 +80,18 @@ private:
             }
             
             // Solve linear system
-            int ierr;
             if (state.allow_pivoting) {
-                ierr = linalg::lu_decomposition<N, true>(state.jacobian, state.pivot);
+                const int ierr = linalg::lu_factor_solve<N, true>(state.jacobian, state.pivot, rhs_newton);
                 if (ierr != 0) {
                     state.y = y_old;
                     return IntegratorResult::LU_DECOMPOSITION_ERROR;
                 }
-                linalg::lu_solve<N, true>(state.jacobian, state.pivot, rhs_newton);
             } else {
-                ierr = linalg::lu_decomposition<N, false>(state.jacobian, state.pivot);
+                const int ierr = linalg::lu_factor_solve<N, false>(state.jacobian, state.pivot, rhs_newton);
                 if (ierr != 0) {
                     state.y = y_old;
                     return IntegratorResult::LU_DECOMPOSITION_ERROR;
                 }
-                linalg::lu_solve<N, false>(state.jacobian, state.pivot, rhs_newton);
             }
             
             // Update solution
@@ -122,7 +119,7 @@ private:
         return IntegratorResult::SUCCESS;
     }
     
-    void numerical_jacobian([[maybe_unused]] ProblemState& problem_state, State& state, Real dt) {
+    INTEGRATORS_HOST_DEVICE void numerical_jacobian([[maybe_unused]] ProblemState& problem_state, State& state, Real dt) {
         std::array<Real, N> rhs_base{}, rhs_pert{};
         std::array<Real, N> y_save = state.y;
         
@@ -147,7 +144,7 @@ private:
     }
     
 public:
-    IntegratorResult integrate(ProblemState& problem_state, State& state) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& problem_state, State& state) {
         state.n_step = 0;
         state.n_rhs = 0;
         state.n_jac = 0;

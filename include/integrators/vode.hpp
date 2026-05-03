@@ -13,7 +13,7 @@
 namespace integrators {
 
 // Debug logging macro
-#ifdef VODE_DEBUG
+#if defined(VODE_DEBUG) && !defined(__CUDA_ARCH__)
 #define VODE_DBG(MSG) do { \
     std::cout.setf(std::ios::scientific, std::ios::floatfield); \
     std::cout.precision(17); \
@@ -84,10 +84,10 @@ struct VODEState : public IntegratorState<N> {
     std::array<int, N> pivot{};
 
     // Helper accessors for 1-based arrays
-    inline Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
-    inline Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
-    inline Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
-    inline Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
+    INTEGRATORS_HOST_DEVICE inline Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE inline Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE inline Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE inline Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
 };
 
 template<typename Problem>
@@ -99,11 +99,11 @@ public:
 
 private:
     // Evaluate RHS f(t, y) into out
-    static inline void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE inline void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
         Problem::rhs(t, y, out);
     }
 
-    static inline void clean_state_vector(State& s) {
+    static INTEGRATORS_HOST_DEVICE inline void clean_state_vector(State& s) {
         if (!s.clean_constrained_components) return;
 
         const int constrained_components = std::min<int>(s.constrained_components, static_cast<int>(N));
@@ -113,25 +113,25 @@ private:
         }
     }
 
-    static inline void rhs_state(Real t, State& s, std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE inline void rhs_state(Real t, State& s, std::array<Real, N>& out) {
         clean_state_vector(s);
         rhs(t, s.y, out);
     }
 
     // Evaluate analytic Jacobian if available
-    static inline void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
+    static INTEGRATORS_HOST_DEVICE inline void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
         Problem::jacobian(t, y, J);
     }
 
-    static inline Real rtol_for(const State& s, size_type i) {
+    static INTEGRATORS_HOST_DEVICE inline Real rtol_for(const State& s, size_type i) {
         return s.use_vector_tolerances ? s.rtol_vec[i] : s.rtol;
     }
 
-    static inline Real atol_for(const State& s, size_type i) {
+    static INTEGRATORS_HOST_DEVICE inline Real atol_for(const State& s, size_type i) {
         return s.use_vector_tolerances ? s.atol_vec[i] : s.atol;
     }
 
-    static void update_error_weights(State& s) {
+    static INTEGRATORS_HOST_DEVICE void update_error_weights(State& s) {
         for (size_type i = 0; i < N; ++i) {
             s.ewt[i] = rtol_for(s, i) * std::abs(s.YH(static_cast<int>(i+1), 1)) + atol_for(s, i);
             s.ewt[i] = 1.0 / s.ewt[i];
@@ -139,7 +139,7 @@ private:
     }
 
     // dvset: set integration coefficients
-    static void dvset(State& s) {
+    static INTEGRATORS_HOST_DEVICE void dvset(State& s) {
         constexpr Real CORTES = 0.1;
         const Real FLOTL = static_cast<Real>(s.L);
         const int NQM1 = s.NQ - 1;
@@ -199,7 +199,7 @@ private:
     }
 
     // Multiply yh by Pascal triangle matrix (advance prediction)
-    static void advance_nordsieck(State& s) {
+    static INTEGRATORS_HOST_DEVICE void advance_nordsieck(State& s) {
         for (int k = s.NQ; k >= 1; --k) {
             for (int j = k; j <= s.NQ; ++j) {
                 for (size_type i = 1; i <= N; ++i) {
@@ -210,7 +210,7 @@ private:
     }
 
     // Undo Pascal multiplication (retract)
-    static void retract_nordsieck(State& s) {
+    static INTEGRATORS_HOST_DEVICE void retract_nordsieck(State& s) {
         for (int k = s.NQ; k >= 1; --k) {
             for (int j = k; j <= s.NQ; ++j) {
                 for (size_type i = 1; i <= N; ++i) {
@@ -221,7 +221,7 @@ private:
     }
 
     // dvjac: build and factor P = I - h*rl1*J
-    static int dvjac(State& s) {
+    static INTEGRATORS_HOST_DEVICE int dvjac(State& s) {
         // Build Jacobian J
         if (s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian) {
             if constexpr (ProblemTraits<Problem>::has_analytic_jacobian) {
@@ -274,7 +274,7 @@ private:
     }
 
     // dvnlsd: nonlinear solve for one step, returns ACNRM and sets NFLAG
-    static Real dvnlsd(int& NFLAG, State& s) {
+    static INTEGRATORS_HOST_DEVICE Real dvnlsd(int& NFLAG, State& s) {
         constexpr Real CCMAX = 0.3;
         constexpr Real CRDOWN = 0.3;
         constexpr Real RDIV = 2.0;
@@ -393,7 +393,7 @@ private:
     }
 
     // dvjust: adjust YH on order change
-    static void dvjust(int IORD, State& s) {
+    static INTEGRATORS_HOST_DEVICE void dvjust(int IORD, State& s) {
         if ((s.NQ == 2) && (IORD != 1)) return;
         const int NQM1 = s.NQ - 1; const int NQM2 = s.NQ - 2;
         if (IORD != 1) {
@@ -425,7 +425,7 @@ private:
     }
 
     // dvhin: compute initial step size H0
-    static void dvhin(State& s, Real& H0, int& NITER, int& IER) {
+    static INTEGRATORS_HOST_DEVICE void dvhin(State& s, Real& H0, int& NITER, int& IER) {
         constexpr Real PT1 = 0.1;
         NITER = 0; IER = 0; H0 = 0.0;
         const Real TDIST = std::abs(s.tout - s.t);
@@ -468,7 +468,7 @@ private:
     }
 
     // One dvstep; returns kflag (0 success, -1 dt underflow, -2 corrector failure)
-    static int dvstep(State& s) {
+    static INTEGRATORS_HOST_DEVICE int dvstep(State& s) {
         constexpr int KFC = -3;
         constexpr int KFH = -7;
         constexpr int MXNCF = 10;
@@ -742,7 +742,7 @@ private:
     }
 
 public:
-    IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
         // Initialize

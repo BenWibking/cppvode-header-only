@@ -84,6 +84,11 @@ if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_ARCHITECTURES 90)
 
+    if(INTEGRATORS_USE_CUSOLVERDX)
+        set_target_properties(test_vode_gpu PROPERTIES
+            INTERPROCEDURAL_OPTIMIZATION ON)
+    endif()
+
     # Enable extended device lambda support for NVCC
     target_compile_options(test_vode_gpu PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda --expt-relaxed-constexpr>)

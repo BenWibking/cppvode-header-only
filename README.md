@@ -66,6 +66,7 @@ build/examples/robertson
 Useful options:
 - `-DBUILD_TESTS=ON` and `-DBUILD_EXAMPLES=ON` (both ON by default)
 - `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE internal logs
+- `-DINTEGRATORS_USE_CUSOLVERDX=ON` to use cuSolverDx for CUDA device LU factorization/solve. Requires CUDA, CMake 3.18+, and a MathDx install visible to `find_package(mathdx CONFIG)`, for example via `-Dmathdx_ROOT=/path/to/nvidia/mathdx/YY.MM`. CUDA targets using this path also need `CUDA_SEPARABLE_COMPILATION` and `INTERPROCEDURAL_OPTIMIZATION` enabled.
 - `-DWARNINGS_AS_ERRORS=ON` to treat C/C++ warnings as errors (matches CI; excludes CUDA/Fortran)
 - Debug builds enable AddressSanitizer: `-DCMAKE_BUILD_TYPE=Debug`
 
@@ -73,7 +74,7 @@ Useful options:
 
 - Compiler selection: pass `-DCMAKE_CXX_COMPILER=/path/to/clang++` (or `g++`) to `cmake` or set `CXX` in the environment.
 - CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). The CUDA test target `test_vode_gpu` builds only when CUDA is available.
-- LAPACK support removed: the library always uses the built-in LU/solve.
+- LAPACK support removed: CPU builds always use the built-in LU/solve. CUDA device code can opt into cuSolverDx with `-DINTEGRATORS_USE_CUSOLVERDX=ON`.
 - Reproducibility: record `-DCMAKE_CXX_COMPILER` and `-DCMAKE_BUILD_TYPE` with results. Use `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE traces in Debug builds.
 
 ## Problem Interface Requirements

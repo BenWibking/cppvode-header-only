@@ -10,6 +10,14 @@
 #include <algorithm>
 #include <type_traits>
 
+#ifndef INTEGRATORS_HOST_DEVICE
+#if defined(__CUDACC__) || defined(__HIPCC__)
+#define INTEGRATORS_HOST_DEVICE __host__ __device__
+#else
+#define INTEGRATORS_HOST_DEVICE
+#endif
+#endif
+
 namespace integrators {
 
 // Basic real type - can be changed to double/long double as needed

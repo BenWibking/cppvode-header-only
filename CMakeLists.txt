@@ -8,16 +8,19 @@ project(HeaderOnlyIntegrators
     LANGUAGES CXX Fortran)
 
 option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+option(INTEGRATORS_USE_CUSOLVERDX "Use cuSolverDx for CUDA device LU factorization/solve" OFF)
 
-# Optionally enable CUDA if a compiler is available (for GPU tests)
+# Optionally enable CUDA if a compiler is available (for GPU tests or cuSolverDx)
 include(CheckLanguage)
 check_language(CUDA)
-if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
+if((BUILD_CUDA_TESTS OR INTEGRATORS_USE_CUSOLVERDX) AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
     # Suppress host compiler pedantic warnings when compiling CUDA sources
     # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
     add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
+elseif(INTEGRATORS_USE_CUSOLVERDX)
+    message(FATAL_ERROR "INTEGRATORS_USE_CUSOLVERDX=ON requires a CUDA compiler")
 elseif(BUILD_CUDA_TESTS)
     message(WARNING "BUILD_CUDA_TESTS=ON but no CUDA compiler detected; GPU tests will be skipped")
 endif()
@@ -35,6 +38,16 @@ target_include_directories(integrators INTERFACE
 )
 
 # System LAPACK support removed; always use built-in LU/solve
+
+if(INTEGRATORS_USE_CUSOLVERDX)
+    if(CMAKE_VERSION VERSION_LESS 3.18)
+        message(FATAL_ERROR "INTEGRATORS_USE_CUSOLVERDX=ON requires CMake 3.18 or newer for MathDx CMake targets")
+    endif()
+
+    find_package(mathdx REQUIRED COMPONENTS cusolverdx CONFIG)
+    target_compile_definitions(integrators INTERFACE INTEGRATORS_USE_CUSOLVERDX)
+    target_link_libraries(integrators INTERFACE mathdx::cusolverdx)
+endif()
 
 # Optional verbose debug logging for VODE internals
 # Enable with: -DINTEGRATORS_VODE_DEBUG=ON

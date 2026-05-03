@@ -8,17 +8,145 @@
 #include <cmath>
 #include "integrator_types.hpp"
 
+#if defined(INTEGRATORS_USE_CUSOLVERDX) && defined(__CUDACC__)
+#include <cusolverdx.hpp>
+#endif
+
 namespace integrators {
 namespace linalg {
 
 // System LAPACK support removed; always use built-in LU/solve
 
+#if defined(INTEGRATORS_USE_CUSOLVERDX) && defined(__CUDA_ARCH__)
+namespace detail {
+
+template<size_type N, bool AllowPivoting>
+__device__ int cusolverdx_lu_decomposition(std::array<std::array<Real, N>, N>& A,
+                                           std::array<int, N>& ipvt) {
+    if constexpr (N == 0) {
+        return 0;
+    } else {
+        static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
+                      "cuSolverDx LU support requires integrators::Real to be float or double");
+
+        if constexpr (AllowPivoting) {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N)>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::getrf_partial_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            typename Solver::status_type info[1]{};
+            Solver().execute(&A[0][0], static_cast<unsigned int>(N), &ipvt[0], info);
+            return static_cast<int>(info[0]);
+        } else {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N)>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::getrf_no_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            typename Solver::status_type info[1]{};
+            Solver().execute(&A[0][0], static_cast<unsigned int>(N), info);
+            for (size_type i = 0; i < N; ++i) {
+                ipvt[i] = static_cast<int>(i);
+            }
+            return static_cast<int>(info[0]);
+        }
+    }
+}
+
+template<size_type N, bool AllowPivoting>
+__device__ void cusolverdx_lu_solve(const std::array<std::array<Real, N>, N>& LU,
+                                    const std::array<int, N>& ipvt,
+                                    std::array<Real, N>& x) {
+    if constexpr (N > 0) {
+        static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
+                      "cuSolverDx LU support requires integrators::Real to be float or double");
+
+        if constexpr (AllowPivoting) {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N), 1>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::getrs_partial_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major, cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            Solver().execute(&LU[0][0], static_cast<unsigned int>(N), &ipvt[0],
+                             &x[0], 1);
+        } else {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N), 1>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::getrs_no_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major, cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            Solver().execute(&LU[0][0], static_cast<unsigned int>(N), &x[0], 1);
+        }
+    }
+}
+
+template<size_type N, bool AllowPivoting>
+__device__ int cusolverdx_lu_factor_solve(std::array<std::array<Real, N>, N>& A,
+                                          std::array<int, N>& ipvt,
+                                          std::array<Real, N>& x) {
+    if constexpr (N == 0) {
+        return 0;
+    } else {
+        static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
+                      "cuSolverDx LU support requires integrators::Real to be float or double");
+
+        if constexpr (AllowPivoting) {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N), 1>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::gesv_partial_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major, cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            typename Solver::status_type info[1]{};
+            Solver().execute(&A[0][0], static_cast<unsigned int>(N), &ipvt[0],
+                             &x[0], 1, info);
+            return static_cast<int>(info[0]);
+        } else {
+            using Solver = decltype(cusolverdx::Size<static_cast<unsigned int>(N),
+                                                     static_cast<unsigned int>(N), 1>()
+                                    + cusolverdx::Precision<Real>()
+                                    + cusolverdx::Type<cusolverdx::type::real>()
+                                    + cusolverdx::Function<cusolverdx::function::gesv_no_pivot>()
+                                    + cusolverdx::Arrangement<cusolverdx::row_major, cusolverdx::row_major>()
+                                    + cusolverdx::SM<__CUDA_ARCH__>()
+                                    + cusolverdx::Thread());
+            typename Solver::status_type info[1]{};
+            Solver().execute(&A[0][0], static_cast<unsigned int>(N), &x[0], 1, info);
+            for (size_type i = 0; i < N; ++i) {
+                ipvt[i] = static_cast<int>(i);
+            }
+            return static_cast<int>(info[0]);
+        }
+    }
+}
+
+} // namespace detail
+#endif
+
 // LU decomposition with partial pivoting (built-in implementation)
 // Stores ipvt[k] = index of pivot row chosen at column k (0-based).
 // The matrix A is overwritten with L (unit diagonal implied) and U.
 template<size_type N, bool AllowPivoting = true>
-int lu_decomposition(std::array<std::array<Real, N>, N>& A,
-                     std::array<int, N>& ipvt) {
+INTEGRATORS_HOST_DEVICE int lu_decomposition(std::array<std::array<Real, N>, N>& A,
+                                             std::array<int, N>& ipvt) {
+#if defined(INTEGRATORS_USE_CUSOLVERDX) && defined(__CUDA_ARCH__)
+    return detail::cusolverdx_lu_decomposition<N, AllowPivoting>(A, ipvt);
+#else
     int info = 0;
 
     if constexpr (N > 1) {
@@ -41,7 +169,9 @@ int lu_decomposition(std::array<std::array<Real, N>, N>& A,
             if (A[pivot_row][k] != 0.0) {
                 if constexpr (AllowPivoting) {
                     if (pivot_row != k) {
-                        std::swap(A[pivot_row][k], A[k][k]);
+                        const Real t = A[pivot_row][k];
+                        A[pivot_row][k] = A[k][k];
+                        A[k][k] = t;
                     }
                 }
 
@@ -77,13 +207,17 @@ int lu_decomposition(std::array<std::array<Real, N>, N>& A,
     }
 
     return info;
+#endif
 }
 
 // Solve Ax = b given LU and ipvt from lu_decomposition.
 template<size_type N, bool AllowPivoting = true>
-void lu_solve(const std::array<std::array<Real, N>, N>& LU,
-              const std::array<int, N>& ipvt,
-              std::array<Real, N>& x) {
+INTEGRATORS_HOST_DEVICE void lu_solve(const std::array<std::array<Real, N>, N>& LU,
+                                      const std::array<int, N>& ipvt,
+                                      std::array<Real, N>& x) {
+#if defined(INTEGRATORS_USE_CUSOLVERDX) && defined(__CUDA_ARCH__)
+    detail::cusolverdx_lu_solve<N, AllowPivoting>(LU, ipvt, x);
+#else
     if constexpr (N > 1) {
         for (size_type k = 0; k < N - 1; ++k) {
             Real t{};
@@ -112,13 +246,30 @@ void lu_solve(const std::array<std::array<Real, N>, N>& LU,
             x[j] += t * LU[j][k];
         }
     }
+#endif
+}
+
+// One-shot solve. On CUDA devices with cuSolverDx enabled, this maps to GESV.
+template<size_type N, bool AllowPivoting = true>
+INTEGRATORS_HOST_DEVICE int lu_factor_solve(std::array<std::array<Real, N>, N>& A,
+                                            std::array<int, N>& ipvt,
+                                            std::array<Real, N>& x) {
+#if defined(INTEGRATORS_USE_CUSOLVERDX) && defined(__CUDA_ARCH__)
+    return detail::cusolverdx_lu_factor_solve<N, AllowPivoting>(A, ipvt, x);
+#else
+    const int info = lu_decomposition<N, AllowPivoting>(A, ipvt);
+    if (info == 0) {
+        lu_solve<N, AllowPivoting>(A, ipvt, x);
+    }
+    return info;
+#endif
 }
 
 // Matrix-vector multiplication
 template<size_type N>
-void matvec(const std::array<std::array<Real, N>, N>& A,
-            const std::array<Real, N>& x,
-            std::array<Real, N>& y) {
+INTEGRATORS_HOST_DEVICE void matvec(const std::array<std::array<Real, N>, N>& A,
+                                    const std::array<Real, N>& x,
+                                    std::array<Real, N>& y) {
     for (size_type i = 0; i < N; ++i) {
         y[i] = 0.0;
         for (size_type j = 0; j < N; ++j) {
@@ -129,7 +280,7 @@ void matvec(const std::array<std::array<Real, N>, N>& A,
 
 // Vector norms
 template<size_type N>
-Real norm2(const std::array<Real, N>& x) {
+INTEGRATORS_HOST_DEVICE Real norm2(const std::array<Real, N>& x) {
     Real sum = 0.0;
     for (size_type i = 0; i < N; ++i) {
         sum += x[i] * x[i];
@@ -138,7 +289,7 @@ Real norm2(const std::array<Real, N>& x) {
 }
 
 template<size_type N>
-Real norm_inf(const std::array<Real, N>& x) {
+INTEGRATORS_HOST_DEVICE Real norm_inf(const std::array<Real, N>& x) {
     Real max_val = 0.0;
     for (size_type i = 0; i < N; ++i) {
         max_val = std::max(max_val, std::abs(x[i]));

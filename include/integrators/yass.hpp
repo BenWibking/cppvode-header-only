@@ -28,7 +28,7 @@ public:
 
 private:
     // YASS step: (I - dt J(y0)) delta = dt F(y0), y1 = y0 + delta.
-    IntegratorResult single_step(ProblemState& problem_state, State& state, Real dt) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult single_step(ProblemState& problem_state, State& state, Real dt) {
         const std::array<Real, N> y_old = state.y;
         std::array<Real, N> rhs_val{};
 
@@ -65,23 +65,20 @@ private:
             delta[i] = dt * rhs_val[i];
         }
 
-        int ierr;
         if (state.allow_pivoting) {
-            ierr =
-                linalg::lu_decomposition<N, true>(state.jacobian, state.pivot);
+            const int ierr =
+                linalg::lu_factor_solve<N, true>(state.jacobian, state.pivot, delta);
             if (ierr != 0) {
                 state.y = y_old;
                 return IntegratorResult::LU_DECOMPOSITION_ERROR;
             }
-            linalg::lu_solve<N, true>(state.jacobian, state.pivot, delta);
         } else {
-            ierr =
-                linalg::lu_decomposition<N, false>(state.jacobian, state.pivot);
+            const int ierr =
+                linalg::lu_factor_solve<N, false>(state.jacobian, state.pivot, delta);
             if (ierr != 0) {
                 state.y = y_old;
                 return IntegratorResult::LU_DECOMPOSITION_ERROR;
             }
-            linalg::lu_solve<N, false>(state.jacobian, state.pivot, delta);
         }
 
         for (size_type i = 0; i < N; ++i) {
@@ -91,7 +88,7 @@ private:
         return IntegratorResult::SUCCESS;
     }
 
-    void numerical_jacobian([[maybe_unused]] ProblemState& problem_state, State& state) {
+    INTEGRATORS_HOST_DEVICE void numerical_jacobian([[maybe_unused]] ProblemState& problem_state, State& state) {
         std::array<Real, N> rhs_base{}, rhs_pert{};
         const std::array<Real, N> y_save = state.y;
 
@@ -115,7 +112,7 @@ private:
     }
 
 public:
-    IntegratorResult integrate(ProblemState& problem_state, State& state) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& problem_state, State& state) {
         state.n_step = 0;
         state.n_rhs = 0;
         state.n_jac = 0;
