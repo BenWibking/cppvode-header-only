@@ -19,7 +19,7 @@ struct IntegratorFactory {
     enum class Type { BACKWARD_EULER, YASS, VODE };
     
     template<Type IntType>
-    static auto create() {
+    static INTEGRATORS_HOST_DEVICE auto create() {
         if constexpr (IntType == Type::BACKWARD_EULER) {
             return BackwardEuler<Problem>{};
         } else if constexpr (IntType == Type::YASS) {

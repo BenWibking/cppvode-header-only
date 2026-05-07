@@ -73,7 +73,7 @@ Useful options:
 ## Development Tips
 
 - Compiler selection: pass `-DCMAKE_CXX_COMPILER=/path/to/clang++` (or `g++`) to `cmake` or set `CXX` in the environment.
-- CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). The CUDA test target `test_vode_gpu` builds only when CUDA is available.
+- CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). With `-DBUILD_CUDA_TESTS=ON`, the regular integrator tests are replaced by the CUDA target `test_gpu_all`, which launches integrator and linear algebra checks from device kernels.
 - LAPACK support removed: CPU builds always use the built-in LU/solve. CUDA device code can opt into cuSolverDx with `-DINTEGRATORS_USE_CUSOLVERDX=ON`.
 - Reproducibility: record `-DCMAKE_CXX_COMPILER` and `-DCMAKE_BUILD_TYPE` with results. Use `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE traces in Debug builds.
 
@@ -119,7 +119,7 @@ tests/                        # Executable tests (run via ctest)
 ├── test_vode_hires.cpp       # HIRES stiff benchmark
 ├── test_vode_nelson.cpp      # Nelson astrochemistry check
 ├── test_vode_robertson_strict.cpp # Strict Robertson tolerances
-└── test_vode_gpu.cu          # Optional CUDA test (if CUDA enabled)
+└── test_gpu_all.cu           # CUDA device-kernel test suite (if enabled)
 
 extern/                       # External references for comparisons
 └── dvode.f                   # Original DVODE Fortran source (reference)
