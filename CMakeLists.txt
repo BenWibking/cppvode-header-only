@@ -16,6 +16,9 @@ check_language(CUDA)
 if((BUILD_CUDA_TESTS OR INTEGRATORS_USE_CUSOLVERDX) AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_EXTENSIONS OFF)
     # Suppress host compiler pedantic warnings when compiling CUDA sources
     # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
     add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
@@ -32,6 +35,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Add the header-only library as interface target
 add_library(integrators INTERFACE)
+target_compile_features(integrators INTERFACE cxx_std_20)
 target_include_directories(integrators INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>

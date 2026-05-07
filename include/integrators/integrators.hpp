@@ -31,27 +31,26 @@ struct IntegratorFactory {
     }
     
 private:
-    template<Type>
-    struct state_selector;
-
-    template<>
-    struct state_selector<Type::BACKWARD_EULER> {
-        using type = BackwardEulerState<ProblemTraits<Problem>::neqs>;
+    template<typename State>
+    struct state_identity {
+        using type = State;
     };
 
-    template<>
-    struct state_selector<Type::YASS> {
-        using type = YASSState<ProblemTraits<Problem>::neqs>;
-    };
-
-    template<>
-    struct state_selector<Type::VODE> {
-        using type = VODEState<ProblemTraits<Problem>::neqs>;
-    };
+    template<Type IntType>
+    static consteval auto select_state() {
+        if constexpr (IntType == Type::BACKWARD_EULER) {
+            return state_identity<BackwardEulerState<ProblemTraits<Problem>::neqs>>{};
+        } else if constexpr (IntType == Type::YASS) {
+            return state_identity<YASSState<ProblemTraits<Problem>::neqs>>{};
+        } else {
+            static_assert(IntType == Type::VODE, "Unsupported integrator type");
+            return state_identity<VODEState<ProblemTraits<Problem>::neqs>>{};
+        }
+    }
 
 public:
     template<Type IntType>
-    using state_type = typename state_selector<IntType>::type;
+    using state_type = typename decltype(select_state<IntType>())::type;
 };
 
 // Convenience aliases

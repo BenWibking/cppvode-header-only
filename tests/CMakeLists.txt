@@ -63,21 +63,19 @@ add_test(NAME vode_jacobian_counter_test COMMAND test_vode_jacobian_counter)
 if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
     add_executable(test_vode_gpu test_vode_gpu.cu)
 
-    # Choose the highest CUDA C++ standard supported; fall back to C++17 if CUDA20 isn't available.
-    # Use several heuristics because older CMake versions may not advertise features for the CUDA toolchain.
-    set(_cuda_std_msg "unknown")
-    if(DEFINED CMAKE_CUDA20_STANDARD_COMPILE_OPTION OR "cuda_std_20" IN_LIST CMAKE_CUDA_COMPILE_FEATURES OR CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0)
-        set_target_properties(test_vode_gpu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED OFF)
-        set(_cuda_std_msg "C++20")
-    elseif("cuda_std_17" IN_LIST CMAKE_CUDA_COMPILE_FEATURES OR CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 11.0)
-        set_target_properties(test_vode_gpu PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED OFF)
-        set(_cuda_std_msg "C++17")
-    else()
-        # Last resort for very old CMake/compilers: try a manual flag.
-        target_compile_options(test_vode_gpu PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-std=c++17>)
-        set(_cuda_std_msg "C++17 (manual flag)")
+    # The headers require C++20, so CUDA tests must compile as CUDA C++20 too.
+    if(NOT (DEFINED CMAKE_CUDA20_STANDARD_COMPILE_OPTION
+            OR "cuda_std_20" IN_LIST CMAKE_CUDA_COMPILE_FEATURES
+            OR CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0))
+        message(FATAL_ERROR
+            "test_vode_gpu requires CUDA C++20; use CUDA 12+ or a CMake CUDA "
+            "toolchain that advertises cuda_std_20")
     endif()
-    message(STATUS "test_vode_gpu: using ${_cuda_std_msg} for CUDA (compiler ${CMAKE_CUDA_COMPILER_VERSION})")
+    set_target_properties(test_vode_gpu PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_EXTENSIONS OFF)
+    message(STATUS "test_vode_gpu: using C++20 for CUDA (compiler ${CMAKE_CUDA_COMPILER_VERSION})")
 
     # Common CUDA target properties
     set_target_properties(test_vode_gpu PROPERTIES
