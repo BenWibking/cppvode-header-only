@@ -154,7 +154,8 @@ public:
             return IntegratorResult::SUCCESS;
         }
         
-        if (state.dt == 0.0) {
+        const bool auto_dt = (state.dt == 0.0);
+        if (auto_dt) {
             state.dt = remaining0;
         }
 
@@ -173,18 +174,23 @@ public:
             if (result == IntegratorResult::SUCCESS) {
                 state.t = state.tout;
                 state.n_step = 1;
+                return result;
+            } else if (!auto_dt) {
+                state.t = t_old;
+                state.y = y_old;
+                state.n_step = 0;
+                return result;
             } else {
                 state.t = t_old;
                 state.y = y_old;
                 state.n_step = 0;
+                state.dt *= 0.5;
             }
-            return result;
         }
         
         // Adaptive timestepping with Richardson extrapolation
         const Real safety_factor = 1.e-12;
         const int max_steps = 10000;
-        
         Real dt_current = state.dt;
         
         while (direction * (state.tout - state.t) > safety_factor * std::max(std::abs(state.tout), Real(1.0)) &&
@@ -195,18 +201,22 @@ public:
                 dt_current = state.tout - state.t;
             }
             
+            const Real t_save = state.t;
             std::array<Real, N> y_save = state.y;
             
             // Take two half steps
             auto result1 = single_step(problem_state, state, dt_current * 0.5);
             if (result1 != IntegratorResult::SUCCESS) {
+                state.t = t_save;
                 state.y = y_save;
                 dt_current *= 0.5;
                 continue;
             }
             
+            state.t = t_save + dt_current * 0.5;
             auto result2 = single_step(problem_state, state, dt_current * 0.5);
             if (result2 != IntegratorResult::SUCCESS) {
+                state.t = t_save;
                 state.y = y_save;
                 dt_current *= 0.5;
                 continue;
@@ -215,9 +225,11 @@ public:
             std::array<Real, N> y_fine = state.y;
             
             // Take one full step
+            state.t = t_save;
             state.y = y_save;
             auto result3 = single_step(problem_state, state, dt_current);
             if (result3 != IntegratorResult::SUCCESS) {
+                state.t = t_save;
                 state.y = y_save;
                 dt_current *= 0.5;
                 continue;
@@ -234,7 +246,7 @@ public:
             if (error < 1.0) {
                 // Accept step with fine solution
                 state.y = y_fine;
-                state.t += dt_current;
+                state.t = t_save + dt_current;
                 state.n_step++;
                 
                 // Adjust timestep for next step
@@ -242,6 +254,7 @@ public:
                 dt_current *= growth;
             } else {
                 // Reject step
+                state.t = t_save;
                 state.y = y_save;
                 dt_current *= 0.5;
             }

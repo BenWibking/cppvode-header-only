@@ -9,6 +9,9 @@ project(HeaderOnlyIntegrators
 
 option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
 option(INTEGRATORS_USE_CUSOLVERDX "Use cuSolverDx for CUDA device LU factorization/solve" OFF)
+set(INTEGRATORS_CUSOLVERDX_TARGET "static" CACHE STRING
+    "cuSolverDx MathDx target to link when INTEGRATORS_USE_CUSOLVERDX=ON: static or fatbin")
+set_property(CACHE INTEGRATORS_CUSOLVERDX_TARGET PROPERTY STRINGS static fatbin)
 
 # Optionally enable CUDA if a compiler is available (for GPU tests or cuSolverDx)
 include(CheckLanguage)
@@ -49,8 +52,17 @@ if(INTEGRATORS_USE_CUSOLVERDX)
     endif()
 
     find_package(mathdx REQUIRED COMPONENTS cusolverdx CONFIG)
+    if(INTEGRATORS_CUSOLVERDX_TARGET STREQUAL "static")
+        set(INTEGRATORS_CUSOLVERDX_LINK_TARGET mathdx::cusolverdx)
+    elseif(INTEGRATORS_CUSOLVERDX_TARGET STREQUAL "fatbin")
+        set(INTEGRATORS_CUSOLVERDX_LINK_TARGET mathdx::cusolverdx_fatbin)
+    else()
+        message(FATAL_ERROR
+            "INTEGRATORS_CUSOLVERDX_TARGET must be either 'static' or 'fatbin'")
+    endif()
+
     target_compile_definitions(integrators INTERFACE INTEGRATORS_USE_CUSOLVERDX)
-    target_link_libraries(integrators INTERFACE mathdx::cusolverdx)
+    target_link_libraries(integrators INTERFACE ${INTEGRATORS_CUSOLVERDX_LINK_TARGET})
 endif()
 
 # Optional verbose debug logging for VODE internals

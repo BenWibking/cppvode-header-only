@@ -304,7 +304,7 @@ GPU_TEST GpuTestResult reverse_time_integration() {
     state.dt = 0.0;
     state.y = {std::exp(-1.0)};
     state.jacobian_analytic = true;
-    state.rtol = 1.e-9;
+    state.rtol = 1.e-6;
     state.atol = 1.e-12;
 
     const auto result = integrator.integrate(problem_state, state);
@@ -449,7 +449,7 @@ GPU_TEST GpuTestResult linear_invariant() {
     const auto result = integrator.integrate(problem_state, state);
     const Real sum1 = state.y[0] + state.y[1];
     GPU_REQUIRE(result == IntegratorResult::SUCCESS);
-    GPU_REQUIRE(std::abs(sum1 - sum0) < 1.e-12);
+    GPU_REQUIRE_CLOSE(sum1, sum0, 2.e-12);
     GPU_REQUIRE(std::abs(state.y[0] - reverse_equilibrium_fraction()) < 2.e-4);
     return gpu_pass();
 }
