@@ -60,6 +60,20 @@ struct CollapseResult {
     integrators::IntegratorResult result{integrators::IntegratorResult::SUCCESS};
 };
 
+struct CollapseState {
+    pc::burn_t initial_state{};
+    pc::burn_t state{};
+    integrators::Real time{};
+    integrators::Real density_driver{};
+    int completed_steps{};
+};
+
+struct CollapseStepResult {
+    bool stop{};
+    int failed_step{-1};
+    integrators::IntegratorResult result{integrators::IntegratorResult::SUCCESS};
+};
+
 INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) {
     state.use_vector_tolerances = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
@@ -124,51 +138,69 @@ INTEGRATORS_HOST_DEVICE pc::burn_t make_initial_state() {
     return state;
 }
 
-INTEGRATORS_HOST_DEVICE CollapseResult run_collapse() {
+INTEGRATORS_HOST_DEVICE CollapseState make_collapse_state() {
     pc::burn_t state = make_initial_state();
-    const auto initial_state = state;
-    integrators::Real t = 0.0;
-    integrators::Real dd = state.rho;
-    int completed_steps = 0;
+    return {state, state, 0.0, state.rho, 0};
+}
 
-    for (int n = 0; n < nsteps; ++n) {
-        const integrators::Real dd1 = dd;
-        const integrators::Real rhotmp = pc::density(state.xn);
-        const integrators::Real tff = std::sqrt(pc::pi * 3.0 / (32.0 * rhotmp * pc::grav_constant));
-        const integrators::Real dt = tff_reduc * tff;
+INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& collapse, int step) {
+    const integrators::Real dd1 = collapse.density_driver;
+    const integrators::Real rhotmp = pc::density(collapse.state.xn);
+    const integrators::Real tff = std::sqrt(pc::pi * 3.0 / (32.0 * rhotmp * pc::grav_constant));
+    const integrators::Real dt = tff_reduc * tff;
 
-        dd += dt * (dd / tff);
+    collapse.density_driver += dt * (collapse.density_driver / tff);
 
-        if (dt < 10.0 || dd > 2.0e-6) {
-            break;
-        }
-
-        const integrators::Real density_ratio = dd / dd1;
-        for (auto& xn : state.xn) {
-            xn *= density_ratio;
-        }
-        state.rho *= density_ratio;
-
-        const auto result = burn(state, dt);
-        if (result != integrators::IntegratorResult::SUCCESS) {
-            return {initial_state, state, t, completed_steps, n, result};
-        }
-
-        pc::floor_and_normalize_number_densities(state);
-        pc::balance_charge(state);
-        pc::floor_and_normalize_number_densities(state);
-        pc::eos_re(state);
-
-        t += dt;
-        completed_steps += 1;
+    if (dt < 10.0 || collapse.density_driver > 2.0e-6) {
+        return {true, -1, integrators::IntegratorResult::SUCCESS};
     }
 
-    return {initial_state, state, t, completed_steps, -1, integrators::IntegratorResult::SUCCESS};
+    const integrators::Real density_ratio = collapse.density_driver / dd1;
+    for (auto& xn : collapse.state.xn) {
+        xn *= density_ratio;
+    }
+    collapse.state.rho *= density_ratio;
+
+    const auto result = burn(collapse.state, dt);
+    if (result != integrators::IntegratorResult::SUCCESS) {
+        return {true, step, result};
+    }
+
+    pc::floor_and_normalize_number_densities(collapse.state);
+    pc::balance_charge(collapse.state);
+    pc::floor_and_normalize_number_densities(collapse.state);
+    pc::eos_re(collapse.state);
+
+    collapse.time += dt;
+    collapse.completed_steps += 1;
+    return {false, -1, integrators::IntegratorResult::SUCCESS};
+}
+
+INTEGRATORS_HOST_DEVICE CollapseResult collapse_result_from_state(
+    const CollapseState& collapse, const CollapseStepResult& step) {
+    return {collapse.initial_state, collapse.state, collapse.time,
+            collapse.completed_steps, step.failed_step, step.result};
+}
+
+INTEGRATORS_HOST_DEVICE CollapseResult run_collapse() {
+    CollapseState collapse = make_collapse_state();
+    CollapseStepResult step_result{};
+    for (int n = 0; n < nsteps; ++n) {
+        step_result = advance_collapse_step(collapse, n);
+        if (step_result.stop) {
+            break;
+        }
+    }
+    return collapse_result_from_state(collapse, step_result);
 }
 
 #if defined(__CUDACC__)
-__global__ void run_collapse_kernel(CollapseResult* result) {
-    *result = run_collapse();
+__global__ void initialize_collapse_kernel(CollapseState* collapse) {
+    *collapse = make_collapse_state();
+}
+
+__global__ void collapse_step_kernel(CollapseState* collapse, int step, CollapseStepResult* result) {
+    *result = advance_collapse_step(*collapse, step);
 }
 #endif
 
@@ -199,36 +231,88 @@ int main() {
         return 1;
     }
 
-    CollapseResult* device_result = nullptr;
-    err = cudaMalloc(&device_result, sizeof(CollapseResult));
+    CollapseState host_collapse{};
+    CollapseStepResult step_result{};
+    CollapseState* device_collapse = nullptr;
+    CollapseStepResult* device_step_result = nullptr;
+
+    err = cudaMalloc(&device_collapse, sizeof(CollapseState));
     if (err != cudaSuccess) {
         std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
         return 1;
     }
 
-    run_collapse_kernel<<<1, 1>>>(device_result);
+    err = cudaMalloc(&device_step_result, sizeof(CollapseStepResult));
+    if (err != cudaSuccess) {
+        std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_collapse);
+        return 1;
+    }
+
+    initialize_collapse_kernel<<<1, 1>>>(device_collapse);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        std::cerr << "run_collapse_kernel launch failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_result);
+        std::cerr << "initialize_collapse_kernel launch failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_step_result);
+        cudaFree(device_collapse);
         return 1;
     }
 
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
-        std::cerr << "run_collapse_kernel execution failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_result);
+        std::cerr << "initialize_collapse_kernel execution failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_step_result);
+        cudaFree(device_collapse);
         return 1;
     }
 
-    err = cudaMemcpy(&collapse, device_result, sizeof(CollapseResult), cudaMemcpyDeviceToHost);
+    for (int n = 0; n < nsteps; ++n) {
+        collapse_step_kernel<<<1, 1>>>(device_collapse, n, device_step_result);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "collapse_step_kernel launch failed on step " << n << ": "
+                      << cudaGetErrorString(err) << "\n";
+            cudaFree(device_step_result);
+            cudaFree(device_collapse);
+            return 1;
+        }
+
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            std::cerr << "collapse_step_kernel execution failed on step " << n << ": "
+                      << cudaGetErrorString(err) << "\n";
+            cudaFree(device_step_result);
+            cudaFree(device_collapse);
+            return 1;
+        }
+
+        err = cudaMemcpy(&step_result, device_step_result, sizeof(CollapseStepResult),
+                         cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
+            cudaFree(device_step_result);
+            cudaFree(device_collapse);
+            return 1;
+        }
+
+        if (step_result.stop) {
+            break;
+        }
+    }
+
+    err = cudaMemcpy(&host_collapse, device_collapse, sizeof(CollapseState), cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_result);
+        cudaFree(device_step_result);
+        cudaFree(device_collapse);
         return 1;
     }
-    cudaFree(device_result);
-    std::cout << "integration backend: CUDA device kernel\n";
+    cudaFree(device_step_result);
+    cudaFree(device_collapse);
+
+    collapse = {host_collapse.initial_state, host_collapse.state, host_collapse.time,
+                host_collapse.completed_steps, step_result.failed_step, step_result.result};
+    std::cout << "integration backend: CUDA per-step kernels\n";
 #else
     collapse = run_collapse();
     std::cout << "integration backend: CPU\n";
