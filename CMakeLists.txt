@@ -8,6 +8,7 @@ project(HeaderOnlyIntegrators
     LANGUAGES CXX Fortran)
 
 option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+option(BUILD_CUDA_EXAMPLES "Build CUDA-based GPU examples" OFF)
 option(INTEGRATORS_USE_CUSOLVERDX "Use cuSolverDx for CUDA device LU factorization/solve" OFF)
 set(INTEGRATORS_CUSOLVERDX_TARGET "static" CACHE STRING
     "cuSolverDx MathDx target to link when INTEGRATORS_USE_CUSOLVERDX=ON: static or fatbin")
@@ -16,8 +17,9 @@ set_property(CACHE INTEGRATORS_CUSOLVERDX_TARGET PROPERTY STRINGS static fatbin)
 # Optionally enable CUDA if a compiler is available (for GPU tests or cuSolverDx)
 include(CheckLanguage)
 check_language(CUDA)
-if((BUILD_CUDA_TESTS OR INTEGRATORS_USE_CUSOLVERDX) AND CMAKE_CUDA_COMPILER)
+if((BUILD_CUDA_TESTS OR BUILD_CUDA_EXAMPLES OR INTEGRATORS_USE_CUSOLVERDX) AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    set(INTEGRATORS_CUDA_ENABLED ON)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
     set(CMAKE_CUDA_STANDARD 20)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -29,6 +31,8 @@ elseif(INTEGRATORS_USE_CUSOLVERDX)
     message(FATAL_ERROR "INTEGRATORS_USE_CUSOLVERDX=ON requires a CUDA compiler")
 elseif(BUILD_CUDA_TESTS)
     message(WARNING "BUILD_CUDA_TESTS=ON but no CUDA compiler detected; GPU tests will be skipped")
+elseif(BUILD_CUDA_EXAMPLES)
+    message(WARNING "BUILD_CUDA_EXAMPLES=ON but no CUDA compiler detected; GPU examples will use CPU builds")
 endif()
 
 # Set C++ standard

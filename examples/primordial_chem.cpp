@@ -7,6 +7,10 @@
 #include <iostream>
 #include <limits>
 
+#if defined(__CUDACC__)
+#include <cuda_runtime.h>
+#endif
+
 #include <integrators/primordial_chem.hpp>
 #include <integrators/vode.hpp>
 
@@ -47,7 +51,16 @@ constexpr integrators::Real reference_temperature = 3032.992479;
 constexpr integrators::Real reference_eint = 2.721837163e11;
 constexpr integrators::Real reference_rho = 1.836285633e-6;
 
-void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) {
+struct CollapseResult {
+    pc::burn_t initial_state{};
+    pc::burn_t final_state{};
+    integrators::Real time{};
+    int completed_steps{};
+    int failed_step{-1};
+    integrators::IntegratorResult result{integrators::IntegratorResult::SUCCESS};
+};
+
+INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) {
     state.use_vector_tolerances = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
         state.rtol_vec[static_cast<std::size_t>(n)] = rtol_spec;
@@ -63,10 +76,10 @@ void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) 
     state.reject_change_buffer = 1.0e100;
     state.species_failure_tolerance = 1.0e-2;
     state.clean_constrained_components = true;
-    state.component_floor = pc::small_x;
+    state.component_floor = pc::small_number_density_floor();
 }
 
-integrators::IntegratorResult burn_once(pc::burn_t& state, integrators::Real dt) {
+INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once(pc::burn_t& state, integrators::Real dt) {
     pc::eos_rt(state);
 
     auto integrator = integrators::VODE<pc::PrimordialChem>{};
@@ -97,31 +110,22 @@ integrators::IntegratorResult burn_once(pc::burn_t& state, integrators::Real dt)
     return result;
 }
 
-integrators::IntegratorResult burn(pc::burn_t& state, integrators::Real dt) {
+INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, integrators::Real dt) {
     return burn_once(state, dt);
 }
 
-bool nearly_equal(integrators::Real value, integrators::Real reference,
-                  integrators::Real rtol, integrators::Real atol) {
-    return std::abs(value - reference) <= atol + rtol * std::abs(reference);
-}
-
-} // namespace
-
-int main() {
-    std::cout << std::setprecision(std::numeric_limits<integrators::Real>::max_digits10);
-    std::cout << "Primordial Chemistry One-Zone Collapse\n";
-    std::cout << "======================================\n\n";
-
-    pc::set_redshift(30.0);
-
+INTEGRATORS_HOST_DEVICE pc::burn_t make_initial_state() {
     pc::burn_t state;
     state.T = temperature;
     state.xn = initial_number_densities;
     state.rho = pc::density(state.xn);
     pc::normalize_number_densities_to_density(state);
     pc::eos_rt(state);
+    return state;
+}
 
+INTEGRATORS_HOST_DEVICE CollapseResult run_collapse() {
+    pc::burn_t state = make_initial_state();
     const auto initial_state = state;
     integrators::Real t = 0.0;
     integrators::Real dd = state.rho;
@@ -147,17 +151,7 @@ int main() {
 
         const auto result = burn(state, dt);
         if (result != integrators::IntegratorResult::SUCCESS) {
-            std::cout << "VODE failed on collapse step " << n
-                      << " with code " << static_cast<int>(result) << "\n";
-            std::cout << "time: " << t << "\n";
-            std::cout << "rho: " << state.rho << "\n";
-            std::cout << "T: " << state.T << "\n";
-            std::cout << "Eint: " << state.e << "\n";
-            for (int k = 0; k < pc::NumSpec; ++k) {
-                std::cout << "  " << pc::short_spec_names[static_cast<std::size_t>(k)] << ": "
-                          << state.xn[static_cast<std::size_t>(k)] << "\n";
-            }
-            return 1;
+            return {initial_state, state, t, completed_steps, n, result};
         }
 
         pc::floor_and_normalize_number_densities(state);
@@ -167,6 +161,96 @@ int main() {
 
         t += dt;
         completed_steps += 1;
+    }
+
+    return {initial_state, state, t, completed_steps, -1, integrators::IntegratorResult::SUCCESS};
+}
+
+#if defined(__CUDACC__)
+__global__ void run_collapse_kernel(CollapseResult* result) {
+    *result = run_collapse();
+}
+#endif
+
+bool nearly_equal(integrators::Real value, integrators::Real reference,
+                  integrators::Real rtol, integrators::Real atol) {
+    return std::abs(value - reference) <= atol + rtol * std::abs(reference);
+}
+
+} // namespace
+
+int main() {
+    std::cout << std::setprecision(std::numeric_limits<integrators::Real>::max_digits10);
+    std::cout << "Primordial Chemistry One-Zone Collapse\n";
+    std::cout << "======================================\n\n";
+
+    pc::set_redshift(30.0);
+
+    CollapseResult collapse;
+#if defined(__CUDACC__)
+    int device_count = 0;
+    cudaError_t err = cudaGetDeviceCount(&device_count);
+    if (err == cudaErrorNoDevice || device_count == 0) {
+        std::cout << "CUDA run skipped: no CUDA-capable device\n";
+        return 77;
+    }
+    if (err != cudaSuccess) {
+        std::cerr << "cudaGetDeviceCount failed: " << cudaGetErrorString(err) << "\n";
+        return 1;
+    }
+
+    CollapseResult* device_result = nullptr;
+    err = cudaMalloc(&device_result, sizeof(CollapseResult));
+    if (err != cudaSuccess) {
+        std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
+        return 1;
+    }
+
+    run_collapse_kernel<<<1, 1>>>(device_result);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "run_collapse_kernel launch failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_result);
+        return 1;
+    }
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::cerr << "run_collapse_kernel execution failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_result);
+        return 1;
+    }
+
+    err = cudaMemcpy(&collapse, device_result, sizeof(CollapseResult), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_result);
+        return 1;
+    }
+    cudaFree(device_result);
+    std::cout << "integration backend: CUDA device kernel\n";
+#else
+    collapse = run_collapse();
+    std::cout << "integration backend: CPU\n";
+#endif
+
+    const auto initial_state = collapse.initial_state;
+    const auto state = collapse.final_state;
+    const auto t = collapse.time;
+    const auto completed_steps = collapse.completed_steps;
+
+    if (collapse.result != integrators::IntegratorResult::SUCCESS) {
+        std::cout << "VODE failed on collapse step " << collapse.failed_step
+                  << " with code " << static_cast<int>(collapse.result) << "\n";
+        std::cout << "time: " << t << "\n";
+        std::cout << "rho: " << state.rho << "\n";
+        std::cout << "T: " << state.T << "\n";
+        std::cout << "Eint: " << state.e << "\n";
+        for (int k = 0; k < pc::NumSpec; ++k) {
+            std::cout << "  " << pc::short_spec_names[static_cast<std::size_t>(k)] << ": "
+                      << state.xn[static_cast<std::size_t>(k)] << "\n";
+        }
+        return 1;
     }
 
     bool pass = true;

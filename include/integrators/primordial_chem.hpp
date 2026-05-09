@@ -33,7 +33,13 @@ inline Real& redshift_storage() {
     return value;
 }
 
-inline Real redshift() { return redshift_storage(); }
+INTEGRATORS_HOST_DEVICE inline Real redshift() {
+#if defined(__CUDA_ARCH__)
+    return default_redshift;
+#else
+    return redshift_storage();
+#endif
+}
 inline void set_redshift(Real value) { redshift_storage() = value; }
 
 inline constexpr std::array<std::string_view, NumSpec> short_spec_names{
@@ -52,13 +58,36 @@ inline constexpr std::array<Real, NumSpec> gammas{
     5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0,
     1.4, 5.0 / 3.0, 1.4, 1.4, 1.4, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0};
 
+INTEGRATORS_HOST_DEVICE constexpr Real small_number_density_floor() { return 1.0e-100; }
+
+INTEGRATORS_HOST_DEVICE constexpr Real species_mass(int n) {
+    return n == 0 ? 9.10938188e-28 :
+           n == 1 ? 1.67262158e-24 :
+           n == 2 ? 1.67353251819e-24 :
+           n == 3 ? 1.67444345638e-24 :
+           n == 4 ? 3.34512158e-24 :
+           n == 5 ? 3.34603251819e-24 :
+           n == 6 ? 3.34615409819e-24 :
+           n == 7 ? 3.34694345638e-24 :
+           n == 8 ? 3.34706503638e-24 :
+           n == 9 ? 5.01865409819e-24 :
+           n == 10 ? 5.01956503638e-24 :
+           n == 11 ? 6.69024316e-24 :
+           n == 12 ? 6.69115409819e-24 :
+           6.69206503638e-24;
+}
+
+INTEGRATORS_HOST_DEVICE constexpr Real species_gamma(int n) {
+    return (n == 6 || n == 8 || n == 9 || n == 10) ? 1.4 : 5.0 / 3.0;
+}
+
 template <typename T, int Lo, int Hi>
 struct Array1D {
     static_assert(Hi >= Lo);
     std::array<T, static_cast<std::size_t>(Hi - Lo + 1)> data{};
 
-    constexpr T& operator()(int i) { return data[static_cast<std::size_t>(i - Lo)]; }
-    constexpr const T& operator()(int i) const { return data[static_cast<std::size_t>(i - Lo)]; }
+    INTEGRATORS_HOST_DEVICE constexpr T& operator()(int i) { return data[static_cast<std::size_t>(i - Lo)]; }
+    INTEGRATORS_HOST_DEVICE constexpr const T& operator()(int i) const { return data[static_cast<std::size_t>(i - Lo)]; }
 };
 
 struct burn_t {
@@ -69,10 +98,10 @@ struct burn_t {
     bool success{true};
 };
 
-inline Real density(const std::array<Real, NumSpec>& xn) {
+INTEGRATORS_HOST_DEVICE inline Real density(const std::array<Real, NumSpec>& xn) {
     Real rho = 0.0;
     for (std::size_t n = 0; n < xn.size(); ++n) {
-        rho += xn[n] * spmasses[n];
+        rho += xn[n] * species_mass(static_cast<int>(n));
     }
     return rho;
 }
@@ -83,7 +112,7 @@ struct EosSums {
     Real gasconstant{};
 };
 
-inline EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& xn) {
+INTEGRATORS_HOST_DEVICE inline EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& xn) {
     const Real gasconstant = constants::n_A * constants::k_B;
     const Real protonmass = constants::m_p;
     Real sum_abarinv = 0.0;
@@ -91,13 +120,13 @@ inline EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& x
     Real rhotot = 0.0;
 
     for (int n = 0; n < NumSpec; ++n) {
-        rhotot += xn[static_cast<std::size_t>(n)] * spmasses[static_cast<std::size_t>(n)];
+        rhotot += xn[static_cast<std::size_t>(n)] * species_mass(n);
     }
 
     for (int n = 0; n < NumSpec; ++n) {
         const auto idx = static_cast<std::size_t>(n);
         sum_abarinv += xn[idx];
-        sum_gammasinv += (xn[idx] * protonmass / rhotot) * (1.0 / (gammas[idx] - 1.0));
+        sum_gammasinv += (xn[idx] * protonmass / rhotot) * (1.0 / (species_gamma(n) - 1.0));
     }
 
     sum_abarinv *= protonmass / rhotot;
@@ -105,44 +134,44 @@ inline EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& x
     return {sum_abarinv, sum_gammasinv, gasconstant};
 }
 
-inline void eos_rt(burn_t& state) {
+INTEGRATORS_HOST_DEVICE inline void eos_rt(burn_t& state) {
     const EosSums sums = eos_sums_from_number_densities(state.xn);
     state.e = sums.sum_gammasinv * sums.sum_Abarinv * sums.gasconstant * state.T;
 }
 
-inline void eos_re(burn_t& state) {
+INTEGRATORS_HOST_DEVICE inline void eos_re(burn_t& state) {
     const EosSums sums = eos_sums_from_number_densities(state.xn);
     state.T = state.e / (sums.sum_gammasinv * sums.gasconstant * sums.sum_Abarinv);
 }
 
-inline void balance_charge(burn_t& state) {
+INTEGRATORS_HOST_DEVICE inline void balance_charge(burn_t& state) {
     state.xn[0] = -state.xn[3] - state.xn[7] + state.xn[1] + state.xn[12] +
                   state.xn[6] + state.xn[4] + state.xn[9] + 2.0 * state.xn[11];
 }
 
-inline void normalize_number_densities_to_density(burn_t& state) {
+INTEGRATORS_HOST_DEVICE inline void normalize_number_densities_to_density(burn_t& state) {
     std::array<Real, NumSpec> mass_fractions{};
     Real sum = 0.0;
     for (std::size_t n = 0; n < mass_fractions.size(); ++n) {
-        mass_fractions[n] = spmasses[n] * state.xn[n] / state.rho;
+        mass_fractions[n] = species_mass(static_cast<int>(n)) * state.xn[n] / state.rho;
         sum += mass_fractions[n];
     }
     for (std::size_t n = 0; n < mass_fractions.size(); ++n) {
         mass_fractions[n] /= sum;
-        state.xn[n] = mass_fractions[n] * state.rho / spmasses[n];
+        state.xn[n] = mass_fractions[n] * state.rho / species_mass(static_cast<int>(n));
     }
 }
 
-inline void floor_and_normalize_number_densities(burn_t& state) {
+INTEGRATORS_HOST_DEVICE inline void floor_and_normalize_number_densities(burn_t& state) {
     for (Real& xn : state.xn) {
-        xn = std::max(xn, small_x);
+        xn = std::max(xn, small_number_density_floor());
     }
     normalize_number_densities_to_density(state);
 }
 
 namespace Rates {}
 
-inline
+INTEGRATORS_HOST_DEVICE inline
 void rhs_specie(const burn_t& state,
              Array1D<Real, 1, neqs>& ydot,
              const Array1D<Real, 0, NumSpec-1>& X,
@@ -482,8 +511,7 @@ void rhs_specie(const burn_t& state,
 
 }
 
-inline
-Real rhs_eint(const burn_t& state,
+INTEGRATORS_HOST_DEVICE inline Real rhs_eint(const burn_t& state,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const z) {
 
@@ -1321,8 +1349,7 @@ Real rhs_eint(const burn_t& state,
 }
 
 
-inline
-void actual_rhs (burn_t& state, Array1D<Real, 1, neqs>& ydot)
+INTEGRATORS_HOST_DEVICE inline void actual_rhs (burn_t& state, Array1D<Real, 1, neqs>& ydot)
 {
     Real z = redshift();
 
@@ -1346,8 +1373,7 @@ void actual_rhs (burn_t& state, Array1D<Real, 1, neqs>& ydot)
 
 
 template<class MatrixType>
-inline
-void jac_nuc(const burn_t& state,
+INTEGRATORS_HOST_DEVICE inline void jac_nuc(const burn_t& state,
              MatrixType& jac,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const z)
@@ -6807,8 +6833,7 @@ void jac_nuc(const burn_t& state,
 
 
 template<class MatrixType>
-inline
-void actual_jac(const burn_t& state, MatrixType& jac)
+INTEGRATORS_HOST_DEVICE inline void actual_jac(const burn_t& state, MatrixType& jac)
 {
     Real z = redshift();
 
@@ -6826,7 +6851,7 @@ void actual_jac(const burn_t& state, MatrixType& jac)
 struct JacobianAdapter {
     std::array<std::array<Real, neqs>, neqs>& jac;
 
-    Real& operator()(int row, int col) {
+    INTEGRATORS_HOST_DEVICE Real& operator()(int row, int col) {
         return jac[static_cast<std::size_t>(row - 1)][static_cast<std::size_t>(col - 1)];
     }
 };
@@ -6838,17 +6863,18 @@ struct PrimordialChem {
     using rhs_type = std::array<Real, neqs>;
     using jacobian_type = std::array<std::array<Real, neqs>, neqs>;
 
-    static burn_t burn_state_from_y(const state_type& y) {
+    INTEGRATORS_HOST_DEVICE static burn_t burn_state_from_y(const state_type& y) {
         burn_t state;
         for (int n = 0; n < NumSpec; ++n) {
-            state.xn[static_cast<std::size_t>(n)] = std::max(y[static_cast<std::size_t>(n)], small_x);
+            state.xn[static_cast<std::size_t>(n)] =
+                std::max(y[static_cast<std::size_t>(n)], small_number_density_floor());
         }
         state.e = y[NumSpec];
         eos_re(state);
         return state;
     }
 
-    static void rhs([[maybe_unused]] Real t, const state_type& y, rhs_type& dydt) {
+    INTEGRATORS_HOST_DEVICE static void rhs([[maybe_unused]] Real t, const state_type& y, rhs_type& dydt) {
         burn_t state = burn_state_from_y(y);
 
         Array1D<Real, 1, primordial_chem::neqs> ydot;
@@ -6860,7 +6886,7 @@ struct PrimordialChem {
         dydt[NumSpec] = ydot(net_ienuc);
     }
 
-    static void jacobian([[maybe_unused]] Real t, const state_type& y, jacobian_type& jac) {
+    INTEGRATORS_HOST_DEVICE static void jacobian([[maybe_unused]] Real t, const state_type& y, jacobian_type& jac) {
         for (auto& row : jac) {
             row.fill(0.0);
         }
