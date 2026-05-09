@@ -2,10 +2,14 @@
 // ABOUTME: Primordial chemistry one-zone collapse test ported from AMReX Microphysics
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <string_view>
+#include <vector>
 
 #if defined(__CUDACC__)
 #include <cuda_runtime.h>
@@ -26,6 +30,8 @@ constexpr integrators::Real atol_spec = 1.0e-4;
 constexpr integrators::Real rtol_enuc = 1.0e-6;
 constexpr integrators::Real atol_enuc = 1.0e-6;
 constexpr integrators::Real reference_thermodynamic_rtol = 1.0e-5;
+constexpr int default_grid_dim = 1;
+constexpr int cuda_threads_per_block = 128;
 
 constexpr std::array<integrators::Real, pc::NumSpec> initial_number_densities{
     1.0e-4, 1.0e-4, 1.0e0,  1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40,
@@ -72,6 +78,12 @@ struct CollapseStepResult {
     bool stop{};
     int failed_step{-1};
     integrators::IntegratorResult result{integrators::IntegratorResult::SUCCESS};
+};
+
+struct BatchStatus {
+    int completed_global_steps{};
+    int failed_cell{-1};
+    CollapseStepResult failed_step{};
 };
 
 INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) {
@@ -176,31 +188,29 @@ INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& 
     return {false, -1, integrators::IntegratorResult::SUCCESS};
 }
 
-INTEGRATORS_HOST_DEVICE CollapseResult collapse_result_from_state(
-    const CollapseState& collapse, const CollapseStepResult& step) {
-    return {collapse.initial_state, collapse.state, collapse.time,
-            collapse.completed_steps, step.failed_step, step.result};
-}
-
-INTEGRATORS_HOST_DEVICE CollapseResult run_collapse() {
-    CollapseState collapse = make_collapse_state();
-    CollapseStepResult step_result{};
-    for (int n = 0; n < nsteps; ++n) {
-        step_result = advance_collapse_step(collapse, n);
-        if (step_result.stop) {
-            break;
-        }
-    }
-    return collapse_result_from_state(collapse, step_result);
-}
-
 #if defined(__CUDACC__)
-__global__ void initialize_collapse_kernel(CollapseState* collapse) {
-    *collapse = make_collapse_state();
+__global__ void initialize_collapse_kernel(CollapseState* cells,
+                                           CollapseStepResult* cell_results,
+                                           int num_cells) {
+    const int cell = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (cell >= num_cells) {
+        return;
+    }
+
+    cells[cell] = make_collapse_state();
+    cell_results[cell] = {};
 }
 
-__global__ void collapse_step_kernel(CollapseState* collapse, int step, CollapseStepResult* result) {
-    *result = advance_collapse_step(*collapse, step);
+__global__ void collapse_step_kernel(CollapseState* cells,
+                                     CollapseStepResult* cell_results,
+                                     int step,
+                                     int num_cells) {
+    const int cell = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (cell >= num_cells || cell_results[cell].stop) {
+        return;
+    }
+
+    cell_results[cell] = advance_collapse_step(cells[cell], step);
 }
 #endif
 
@@ -209,16 +219,101 @@ bool nearly_equal(integrators::Real value, integrators::Real reference,
     return std::abs(value - reference) <= atol + rtol * std::abs(reference);
 }
 
+bool parse_positive_int(const char* text, int& value) {
+    errno = 0;
+    char* end = nullptr;
+    const long parsed = std::strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' ||
+        parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+void print_usage(const char* program) {
+    std::cerr << "usage: " << program << " [--grid N]\n";
+}
+
+bool parse_args(int argc, char** argv, int& grid_dim) {
+    grid_dim = default_grid_dim;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg{argv[i]};
+        if (arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return false;
+        }
+        if (arg == "--grid") {
+            if (i + 1 >= argc || !parse_positive_int(argv[++i], grid_dim)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            continue;
+        }
+        constexpr std::string_view grid_prefix = "--grid=";
+        if (arg.rfind(grid_prefix, 0) == 0) {
+            if (!parse_positive_int(argv[i] + grid_prefix.size(), grid_dim)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            continue;
+        }
+
+        print_usage(argv[0]);
+        return false;
+    }
+    return true;
+}
+
+bool checked_cell_count(int grid_dim, int& num_cells) {
+    const auto grid = static_cast<long long>(grid_dim);
+    const auto cells = grid * grid * grid;
+    if (cells <= 0 || cells > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    num_cells = static_cast<int>(cells);
+    return true;
+}
+
+BatchStatus batch_status_from_results(const std::vector<CollapseStepResult>& cell_results,
+                                      int completed_global_steps) {
+    bool all_stopped = true;
+    for (std::size_t cell = 0; cell < cell_results.size(); ++cell) {
+        const auto& result = cell_results[cell];
+        if (result.result != integrators::IntegratorResult::SUCCESS) {
+            return {completed_global_steps, static_cast<int>(cell), result};
+        }
+        all_stopped = all_stopped && result.stop;
+    }
+
+    if (all_stopped) {
+        return {completed_global_steps, -1, {true, -1, integrators::IntegratorResult::SUCCESS}};
+    }
+    return {completed_global_steps, -1, {false, -1, integrators::IntegratorResult::SUCCESS}};
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::cout << std::setprecision(std::numeric_limits<integrators::Real>::max_digits10);
     std::cout << "Primordial Chemistry One-Zone Collapse\n";
     std::cout << "======================================\n\n";
 
+    int grid_dim = default_grid_dim;
+    if (!parse_args(argc, argv, grid_dim)) {
+        return 1;
+    }
+    int num_cells = 0;
+    if (!checked_cell_count(grid_dim, num_cells)) {
+        std::cerr << "grid dimension is too large: " << grid_dim << "\n";
+        return 1;
+    }
+
     pc::set_redshift(30.0);
 
-    CollapseResult collapse;
+    std::vector<CollapseState> host_cells(static_cast<std::size_t>(num_cells));
+    std::vector<CollapseStepResult> cell_results(static_cast<std::size_t>(num_cells));
+    BatchStatus batch_status{};
 #if defined(__CUDACC__)
     int device_count = 0;
     cudaError_t err = cudaGetDeviceCount(&device_count);
@@ -231,49 +326,50 @@ int main() {
         return 1;
     }
 
-    CollapseState host_collapse{};
-    CollapseStepResult step_result{};
-    CollapseState* device_collapse = nullptr;
-    CollapseStepResult* device_step_result = nullptr;
+    CollapseState* device_cells = nullptr;
+    CollapseStepResult* device_cell_results = nullptr;
 
-    err = cudaMalloc(&device_collapse, sizeof(CollapseState));
+    err = cudaMalloc(&device_cells, sizeof(CollapseState) * host_cells.size());
     if (err != cudaSuccess) {
         std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
         return 1;
     }
 
-    err = cudaMalloc(&device_step_result, sizeof(CollapseStepResult));
+    err = cudaMalloc(&device_cell_results, sizeof(CollapseStepResult) * cell_results.size());
     if (err != cudaSuccess) {
         std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_collapse);
+        cudaFree(device_cells);
         return 1;
     }
 
-    initialize_collapse_kernel<<<1, 1>>>(device_collapse);
+    const int blocks = (num_cells + cuda_threads_per_block - 1) / cuda_threads_per_block;
+    initialize_collapse_kernel<<<blocks, cuda_threads_per_block>>>(
+        device_cells, device_cell_results, num_cells);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         std::cerr << "initialize_collapse_kernel launch failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_step_result);
-        cudaFree(device_collapse);
+        cudaFree(device_cell_results);
+        cudaFree(device_cells);
         return 1;
     }
 
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::cerr << "initialize_collapse_kernel execution failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_step_result);
-        cudaFree(device_collapse);
+        cudaFree(device_cell_results);
+        cudaFree(device_cells);
         return 1;
     }
 
     for (int n = 0; n < nsteps; ++n) {
-        collapse_step_kernel<<<1, 1>>>(device_collapse, n, device_step_result);
+        collapse_step_kernel<<<blocks, cuda_threads_per_block>>>(
+            device_cells, device_cell_results, n, num_cells);
         err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cerr << "collapse_step_kernel launch failed on step " << n << ": "
                       << cudaGetErrorString(err) << "\n";
-            cudaFree(device_step_result);
-            cudaFree(device_collapse);
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
             return 1;
         }
 
@@ -281,50 +377,83 @@ int main() {
         if (err != cudaSuccess) {
             std::cerr << "collapse_step_kernel execution failed on step " << n << ": "
                       << cudaGetErrorString(err) << "\n";
-            cudaFree(device_step_result);
-            cudaFree(device_collapse);
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
             return 1;
         }
 
-        err = cudaMemcpy(&step_result, device_step_result, sizeof(CollapseStepResult),
+        err = cudaMemcpy(cell_results.data(), device_cell_results,
+                         sizeof(CollapseStepResult) * cell_results.size(),
                          cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
             std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
-            cudaFree(device_step_result);
-            cudaFree(device_collapse);
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
             return 1;
         }
 
-        if (step_result.stop) {
+        batch_status = batch_status_from_results(cell_results, n + 1);
+        if (batch_status.failed_cell >= 0 || batch_status.failed_step.stop) {
             break;
         }
     }
 
-    err = cudaMemcpy(&host_collapse, device_collapse, sizeof(CollapseState), cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(host_cells.data(), device_cells, sizeof(CollapseState) * host_cells.size(),
+                     cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
-        cudaFree(device_step_result);
-        cudaFree(device_collapse);
+        cudaFree(device_cell_results);
+        cudaFree(device_cells);
         return 1;
     }
-    cudaFree(device_step_result);
-    cudaFree(device_collapse);
+    cudaFree(device_cell_results);
+    cudaFree(device_cells);
 
-    collapse = {host_collapse.initial_state, host_collapse.state, host_collapse.time,
-                host_collapse.completed_steps, step_result.failed_step, step_result.result};
-    std::cout << "integration backend: CUDA per-step kernels\n";
+    std::cout << "integration backend: CUDA per-step kernels, one cell per thread\n";
 #else
-    collapse = run_collapse();
-    std::cout << "integration backend: CPU\n";
+    for (auto& cell : host_cells) {
+        cell = make_collapse_state();
+    }
+
+    for (int n = 0; n < nsteps; ++n) {
+        for (std::size_t cell = 0; cell < host_cells.size(); ++cell) {
+            if (!cell_results[cell].stop) {
+                cell_results[cell] = advance_collapse_step(host_cells[cell], n);
+            }
+        }
+
+        batch_status = batch_status_from_results(cell_results, n + 1);
+        if (batch_status.failed_cell >= 0 || batch_status.failed_step.stop) {
+            break;
+        }
+    }
+
+    std::cout << "integration backend: CPU serialized cells\n";
 #endif
+
+    if (host_cells.empty()) {
+        std::cerr << "no cells were initialized\n";
+        return 1;
+    }
+
+    const int representative_cell = batch_status.failed_cell >= 0 ? batch_status.failed_cell : 0;
+    const auto& representative_state = host_cells[static_cast<std::size_t>(representative_cell)];
+    const auto representative_step =
+        batch_status.failed_cell >= 0
+            ? batch_status.failed_step
+            : cell_results[static_cast<std::size_t>(representative_cell)];
+    const CollapseResult collapse{
+        representative_state.initial_state, representative_state.state,
+        representative_state.time, representative_state.completed_steps,
+        representative_step.failed_step, representative_step.result};
 
     const auto initial_state = collapse.initial_state;
     const auto state = collapse.final_state;
     const auto t = collapse.time;
-    const auto completed_steps = collapse.completed_steps;
 
     if (collapse.result != integrators::IntegratorResult::SUCCESS) {
-        std::cout << "VODE failed on collapse step " << collapse.failed_step
+        std::cout << "VODE failed in cell " << representative_cell
+                  << " on collapse step " << collapse.failed_step
                   << " with code " << static_cast<int>(collapse.result) << "\n";
         std::cout << "time: " << t << "\n";
         std::cout << "rho: " << state.rho << "\n";
@@ -339,33 +468,52 @@ int main() {
 
     bool pass = true;
     integrators::Real max_non_deuterium_species_rel_error = 0.0;
-    for (int n = 0; n < pc::NumSpec; ++n) {
-        const auto value = state.xn[static_cast<std::size_t>(n)];
-        const auto reference = reference_number_densities[static_cast<std::size_t>(n)];
-        const auto denom = std::max(std::abs(reference), atol_spec);
-        const auto rel_error = std::abs(value - reference) / denom;
-        if (!deuterium_bearing_species[static_cast<std::size_t>(n)]) {
-            max_non_deuterium_species_rel_error =
-                std::max(max_non_deuterium_species_rel_error, rel_error);
+    integrators::Real max_thermodynamic_rel_error = 0.0;
+    int min_completed_steps = std::numeric_limits<int>::max();
+    int max_completed_steps = 0;
+
+    for (const auto& cell : host_cells) {
+        min_completed_steps = std::min(min_completed_steps, cell.completed_steps);
+        max_completed_steps = std::max(max_completed_steps, cell.completed_steps);
+
+        for (int n = 0; n < pc::NumSpec; ++n) {
+            const auto value = cell.state.xn[static_cast<std::size_t>(n)];
+            const auto reference = reference_number_densities[static_cast<std::size_t>(n)];
+            const auto denom = std::max(std::abs(reference), atol_spec);
+            const auto rel_error = std::abs(value - reference) / denom;
+            if (!deuterium_bearing_species[static_cast<std::size_t>(n)]) {
+                max_non_deuterium_species_rel_error =
+                    std::max(max_non_deuterium_species_rel_error, rel_error);
+            }
+            pass = pass && nearly_equal(
+                               value, reference,
+                               reference_species_rtol[static_cast<std::size_t>(n)], atol_spec);
         }
-        pass = pass && nearly_equal(
-                           value, reference,
-                           reference_species_rtol[static_cast<std::size_t>(n)], atol_spec);
+
+        pass = pass && nearly_equal(cell.state.T, reference_temperature,
+                                    reference_thermodynamic_rtol, atol_spec);
+        pass = pass && nearly_equal(cell.state.e, reference_eint,
+                                    reference_thermodynamic_rtol, atol_enuc);
+        pass = pass && nearly_equal(cell.state.rho, reference_rho, rtol_spec, atol_spec);
+
+        const auto temperature_rel_error =
+            std::abs(cell.state.T - reference_temperature) /
+            std::max(std::abs(reference_temperature), atol_spec);
+        const auto internal_energy_rel_error =
+            std::abs(cell.state.e - reference_eint) /
+            std::max(std::abs(reference_eint), atol_enuc);
+        max_thermodynamic_rel_error =
+            std::max(max_thermodynamic_rel_error,
+                     std::max(temperature_rel_error, internal_energy_rel_error));
     }
 
-    pass = pass && nearly_equal(state.T, reference_temperature, reference_thermodynamic_rtol, atol_spec);
-    pass = pass && nearly_equal(state.e, reference_eint, reference_thermodynamic_rtol, atol_enuc);
-    pass = pass && nearly_equal(state.rho, reference_rho, rtol_spec, atol_spec);
-
-    const auto temperature_rel_error =
-        std::abs(state.T - reference_temperature) / std::max(std::abs(reference_temperature), atol_spec);
-    const auto internal_energy_rel_error =
-        std::abs(state.e - reference_eint) / std::max(std::abs(reference_eint), atol_enuc);
-    const auto max_thermodynamic_rel_error =
-        std::max(temperature_rel_error, internal_energy_rel_error);
-
-    std::cout << "completed collapse steps: " << completed_steps << "\n";
-    std::cout << "time: " << t << "\n";
+    std::cout << "grid: " << grid_dim << "^3 cells (" << num_cells << " total)\n";
+    std::cout << "completed global kernel/step launches: "
+              << batch_status.completed_global_steps << "\n";
+    std::cout << "completed collapse steps per cell: "
+              << min_completed_steps << "..." << max_completed_steps << "\n";
+    std::cout << "representative cell: " << representative_cell << "\n";
+    std::cout << "representative time: " << t << "\n";
     std::cout << "T initial: " << initial_state.T << "\n";
     std::cout << "T final:   " << state.T << "\n";
     std::cout << "Eint initial: " << initial_state.e << "\n";
