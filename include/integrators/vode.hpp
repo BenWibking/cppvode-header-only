@@ -83,6 +83,10 @@ struct VODEState : public IntegratorState<N> {
     std::array<std::array<Real, N>, N> jacobian{}; // P matrix factored
     std::array<int, N> pivot{};
 
+    // Optional narrow diagnostic trace for chemistry debugging.
+    bool trace_deuterium_components{false};
+    int trace_max_internal_steps{200000};
+
     // Helper accessors for 1-based arrays
     INTEGRATORS_HOST_DEVICE inline Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
     INTEGRATORS_HOST_DEVICE inline Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
@@ -101,6 +105,50 @@ private:
     // Evaluate RHS f(t, y) into out
     static INTEGRATORS_HOST_DEVICE inline void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
         Problem::rhs(t, y, out);
+    }
+
+    static INTEGRATORS_HOST_DEVICE inline void trace_deuterium_state(const char* event,
+                                                                     const State& s,
+                                                                     const std::array<Real, N>& y,
+                                                                     const std::array<Real, N>* f,
+                                                                     Real aux) {
+        if (!s.trace_deuterium_components || N <= 14 ||
+            s.n_step > s.trace_max_internal_steps) {
+            return;
+        }
+#if defined(__CUDA_ARCH__)
+        printf("vode_trace,%s,%d,%.17e,%.17e,%d,%d,%d,%.17e,%.17e,%.17e,%.17e,%.17e",
+               event, s.n_step, s.tn, s.H, static_cast<int>(s.NQ), s.n_rhs, s.n_jac,
+               y[4], y[5], y[9], y[10], y[14]);
+        if (f != nullptr) {
+            printf(",%.17e,%.17e,%.17e,%.17e", (*f)[4], (*f)[5], (*f)[9], (*f)[10]);
+        } else {
+            printf(",nan,nan,nan,nan");
+        }
+        printf(",%.17e\n", aux);
+#else
+        std::cout << "vode_trace," << event
+                  << "," << s.n_step
+                  << "," << s.tn
+                  << "," << s.H
+                  << "," << static_cast<int>(s.NQ)
+                  << "," << s.n_rhs
+                  << "," << s.n_jac
+                  << "," << y[4]
+                  << "," << y[5]
+                  << "," << y[9]
+                  << "," << y[10]
+                  << "," << y[14];
+        if (f != nullptr) {
+            std::cout << "," << (*f)[4]
+                      << "," << (*f)[5]
+                      << "," << (*f)[9]
+                      << "," << (*f)[10];
+        } else {
+            std::cout << ",nan,nan,nan,nan";
+        }
+        std::cout << "," << aux << "\n";
+#endif
     }
 
     static INTEGRATORS_HOST_DEVICE inline void clean_state_vector(State& s) {
@@ -299,6 +347,7 @@ private:
             for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1);
             rhs_state(s.tn, s, s.savf);
             s.n_rhs++;
+            trace_deuterium_state("corrector_rhs", s, s.y, &s.savf, static_cast<Real>(NFLAG));
 
             if (s.IPUP == 1) {
                 const int IERPJ = dvjac(s);
@@ -342,6 +391,7 @@ private:
 
                 for (size_type i = 0; i < N; ++i) s.acor[i] += delta[i];
                 for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1) + s.acor[i];
+                trace_deuterium_state("corrector_delta", s, s.y, &delta, DEL);
 
                 if (M != 0) s.CRATE = std::max(CRDOWN * s.CRATE, DEL / DELP);
 
@@ -612,6 +662,13 @@ private:
                 for (int j = 1; j <= s.L; ++j) {
                     for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) += s.EL(j) * s.acor[static_cast<size_type>(i-1)];
                 }
+                if (s.trace_deuterium_components) {
+                    std::array<Real, N> accepted_y{};
+                    for (size_type i = 0; i < N; ++i) {
+                        accepted_y[i] = s.YH(static_cast<int>(i + 1), 1);
+                    }
+                    trace_deuterium_state("accept", s, accepted_y, &s.savf, ACNRM);
+                }
                 s.NQWAIT -= 1;
                 VODE_DBG("ACCEPT_POST_PRE NQWAIT=" << int(s.NQWAIT) << " L=" << int(s.L)
                     << " TQ5=" << s.TQ(5) << " (pre-CONP update)");
@@ -756,6 +813,7 @@ public:
         s.n_rhs = 1;
         // Load initial values yh(:,1)
         for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),1) = s.y[i];
+        trace_deuterium_state("init_rhs", s, s.y, &s.savf, 0.0);
 
         // Load and invert error weights; temporarily set H=1
         s.NQ = 1; s.H = 1.0; update_error_weights(s);
@@ -764,6 +822,7 @@ public:
         Real H0 = 0.0; int NITER = 0; int IER = 0; dvhin(s, H0, NITER, IER); s.n_rhs += NITER;
         if (IER != 0) return IntegratorResult::DT_UNDERFLOW;
         s.H = H0; for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),2) *= s.H;
+        trace_deuterium_state("initial_h", s, s.y, nullptr, H0);
 
         // Initialize method/order and related vars (match DVODE semantics)
         s.NQ = 1; s.NEWQ = 1; s.L = 2; s.TAU(1) = s.H; s.PRL1 = 1.0; s.RC = 0.0;
@@ -804,6 +863,7 @@ public:
                 const int j = s.NQ - jb;
                 for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), j+1) + S * s.y[i];
             }
+            trace_deuterium_state("final_interp", s, s.y, nullptr, S);
             s.t = s.tout; return IntegratorResult::SUCCESS;
         }
     }

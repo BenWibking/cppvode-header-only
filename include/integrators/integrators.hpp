@@ -9,6 +9,7 @@
 #include "backward_euler.hpp"
 #include "yass.hpp"
 #include "vode.hpp"
+#include "rodas.hpp"
 
 namespace integrators {
 
@@ -16,7 +17,7 @@ namespace integrators {
 template<typename Problem>
 struct IntegratorFactory {
     
-    enum class Type { BACKWARD_EULER, YASS, VODE };
+    enum class Type { BACKWARD_EULER, YASS, VODE, RODAS };
     
     template<Type IntType>
     static INTEGRATORS_HOST_DEVICE auto create() {
@@ -24,6 +25,8 @@ struct IntegratorFactory {
             return BackwardEuler<Problem>{};
         } else if constexpr (IntType == Type::YASS) {
             return YASS<Problem>{};
+        } else if constexpr (IntType == Type::RODAS) {
+            return RODAS<Problem>{};
         } else {
             static_assert(IntType == Type::VODE, "Unsupported integrator type");
             return VODE<Problem>{};
@@ -42,6 +45,8 @@ private:
             return state_identity<BackwardEulerState<ProblemTraits<Problem>::neqs>>{};
         } else if constexpr (IntType == Type::YASS) {
             return state_identity<YASSState<ProblemTraits<Problem>::neqs>>{};
+        } else if constexpr (IntType == Type::RODAS) {
+            return state_identity<RODASState<ProblemTraits<Problem>::neqs>>{};
         } else {
             static_assert(IntType == Type::VODE, "Unsupported integrator type");
             return state_identity<VODEState<ProblemTraits<Problem>::neqs>>{};
@@ -62,6 +67,9 @@ using YASS_Integrator = YASS<Problem>;
 
 template<typename Problem>
 using VODE_Integrator = VODE<Problem>;
+
+template<typename Problem>
+using RODAS_Integrator = RODAS<Problem>;
 
 } // namespace integrators
 
