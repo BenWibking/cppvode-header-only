@@ -9,6 +9,7 @@ exe="${repo_dir}/build/examples/primordial_chem"
 
 grid=16
 extra_args=()
+integrators=(vode ros2s)
 
 while (($# > 0)); do
     case "$1" in
@@ -26,6 +27,26 @@ while (($# > 0)); do
                 exit 2
             fi
             grid="$2"
+            shift 2
+            ;;
+        --order)
+            if (($# < 2)); then
+                echo "missing value for --order" >&2
+                exit 2
+            fi
+            case "$2" in
+                vode,ros2s)
+                    integrators=(vode ros2s)
+                    ;;
+                ros2s,vode)
+                    integrators=(ros2s vode)
+                    ;;
+                *)
+                    echo "unsupported --order value: $2" >&2
+                    echo "expected vode,ros2s or ros2s,vode" >&2
+                    exit 2
+                    ;;
+            esac
             shift 2
             ;;
         --)
@@ -69,6 +90,9 @@ run_case() {
 echo "Primordial chemistry GPU timing comparison"
 echo "executable: ${exe}"
 echo "grid: ${grid}^3"
+printf 'order:'
+printf ' %s' "${integrators[@]}"
+printf '\n'
 if ((${#extra_args[@]} > 0)); then
     printf 'extra args:'
     printf ' %q' "${extra_args[@]}"
@@ -76,6 +100,7 @@ if ((${#extra_args[@]} > 0)); then
 fi
 echo
 
-run_case vode
-echo
-run_case ros2s
+for integrator in "${integrators[@]}"; do
+    run_case "${integrator}"
+    echo
+done
