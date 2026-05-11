@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sweep primordial chemistry CPU tolerances and plot timing/accuracy curves."""
+"""Sweep primordial chemistry tolerances and plot timing/accuracy curves."""
 
 from __future__ import annotations
 
@@ -27,10 +27,14 @@ def parse_metric(pattern: str, text: str) -> float:
     return float(match.group(1))
 
 
-def run_case(exe: Path, integrator: str, rtol: float, atol: float | None) -> dict[str, object]:
+def run_case(exe: Path, integrator: str, rtol: float, atol: float | None,
+             grid: int, extra_args: list[str]) -> dict[str, object]:
     cmd = [str(exe), "--integrator", integrator, "--rtol", f"{rtol:.17e}"]
+    if grid != 1:
+        cmd.extend(["--grid", str(grid)])
     if atol is not None:
         cmd.extend(["--atol", f"{atol:.17e}"])
+    cmd.extend(extra_args)
     proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
     text = proc.stdout + proc.stderr
     try:
@@ -96,7 +100,8 @@ def read_csv(path: Path) -> list[dict[str, object]]:
 
 
 def write_plot(path: Path, rows: list[dict[str, object]], x_key: str, x_label: str,
-               show_failures: bool = False, annotate_points: bool = True) -> None:
+               timing_label: str, title: str, show_failures: bool = False,
+               annotate_points: bool = True) -> None:
     selected = [row for row in rows if row["status"] == "PASS"]
     if not selected:
         raise RuntimeError("no valid points to plot")
@@ -156,8 +161,8 @@ def write_plot(path: Path, rows: list[dict[str, object]], x_key: str, x_label: s
         ymax * 1.25,
     )
     ax.set_xlabel(x_label)
-    ax.set_ylabel("single-cell CPU time [s]")
-    ax.set_title("Primordial chemistry CPU Pareto curve")
+    ax.set_ylabel(timing_label)
+    ax.set_title(title)
     ax.grid(True, which="both", alpha=0.3)
     ax.legend()
     fig.savefig(path, dpi=180)
@@ -174,6 +179,10 @@ def main() -> int:
     parser.add_argument("--rtol-min", type=float, default=1.0e-6)
     parser.add_argument("--rtol-max", type=float, default=2.0e-2)
     parser.add_argument("--atol", type=float, default=None)
+    parser.add_argument("--grid", type=int, default=1)
+    parser.add_argument("--timing-label", default="single-cell CPU time [s]")
+    parser.add_argument("--title", default="Primordial chemistry CPU Pareto curve")
+    parser.add_argument("--extra-arg", action="append", default=[])
     args = parser.parse_args()
 
     if args.input_csv is None:
@@ -181,7 +190,8 @@ def main() -> int:
         rows: list[dict[str, object]] = []
         for rtol in rtols:
             for integrator in ("vode", "ros2s"):
-                row = run_case(args.exe, integrator, rtol, args.atol)
+                row = run_case(args.exe, integrator, rtol, args.atol,
+                               args.grid, args.extra_arg)
                 rows.append(row)
                 print(
                     f"{integrator:5s} rtol={rtol:.4e} status={row['status']} "
@@ -190,9 +200,10 @@ def main() -> int:
         write_csv(args.output_csv, rows)
     else:
         rows = read_csv(args.input_csv)
-    write_plot(args.output_plot, rows, "max_rel_error", "max relative error vs reference")
+    write_plot(args.output_plot, rows, "max_rel_error", "max relative error vs reference",
+               args.timing_label, args.title)
     write_plot(args.output_rtol_plot, rows, "rtol", "requested species relative tolerance",
-               show_failures=True, annotate_points=False)
+               args.timing_label, args.title, show_failures=True, annotate_points=False)
     print(f"wrote {args.output_csv}")
     print(f"wrote {args.output_plot}")
     print(f"wrote {args.output_rtol_plot}")

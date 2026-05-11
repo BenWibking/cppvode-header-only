@@ -118,33 +118,37 @@ struct ToleranceConfig {
 
 ToleranceConfig runtime_tolerances{};
 
-INTEGRATORS_HOST_DEVICE integrators::Real active_rtol_spec() {
+#if defined(__CUDACC__)
+__device__ __constant__ ToleranceConfig device_tolerances;
+#endif
+
+PRIMORDIAL_CHEM_PROBE_HOST_DEVICE integrators::Real active_rtol_spec() {
 #if defined(__CUDA_ARCH__)
-    return rtol_spec;
+    return device_tolerances.rtol_spec_value;
 #else
     return runtime_tolerances.rtol_spec_value;
 #endif
 }
 
-INTEGRATORS_HOST_DEVICE integrators::Real active_atol_spec() {
+PRIMORDIAL_CHEM_PROBE_HOST_DEVICE integrators::Real active_atol_spec() {
 #if defined(__CUDA_ARCH__)
-    return atol_spec;
+    return device_tolerances.atol_spec_value;
 #else
     return runtime_tolerances.atol_spec_value;
 #endif
 }
 
-INTEGRATORS_HOST_DEVICE integrators::Real active_rtol_enuc() {
+PRIMORDIAL_CHEM_PROBE_HOST_DEVICE integrators::Real active_rtol_enuc() {
 #if defined(__CUDA_ARCH__)
-    return rtol_enuc;
+    return device_tolerances.rtol_enuc_value;
 #else
     return runtime_tolerances.rtol_enuc_value;
 #endif
 }
 
-INTEGRATORS_HOST_DEVICE integrators::Real active_atol_enuc() {
+PRIMORDIAL_CHEM_PROBE_HOST_DEVICE integrators::Real active_atol_enuc() {
 #if defined(__CUDA_ARCH__)
-    return atol_enuc;
+    return device_tolerances.atol_enuc_value;
 #else
     return runtime_tolerances.atol_enuc_value;
 #endif
@@ -1375,6 +1379,12 @@ int main(int argc, char** argv) {
     }
     if (err != cudaSuccess) {
         std::cerr << "cudaGetDeviceCount failed: " << cudaGetErrorString(err) << "\n";
+        return 1;
+    }
+    err = cudaMemcpyToSymbol(device_tolerances, &runtime_tolerances, sizeof(ToleranceConfig));
+    if (err != cudaSuccess) {
+        std::cerr << "cudaMemcpyToSymbol(device_tolerances) failed: "
+                  << cudaGetErrorString(err) << "\n";
         return 1;
     }
     cudaDeviceProp device_prop{};
