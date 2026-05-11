@@ -48,6 +48,9 @@ struct VODEState : public IntegratorState<N> {
     int n_rhs{0};
     int n_jac{0};
     int n_step{0};
+    int n_decomp{0};
+    int n_solve{0};
+    int n_error_fails{0};
     int err_fails{0}; // consecutive error test failures
 
     // Flags
@@ -88,10 +91,10 @@ struct VODEState : public IntegratorState<N> {
     int trace_max_internal_steps{200000};
 
     // Helper accessors for 1-based arrays
-    INTEGRATORS_HOST_DEVICE inline Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
-    INTEGRATORS_HOST_DEVICE inline Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
-    INTEGRATORS_HOST_DEVICE inline Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
-    INTEGRATORS_HOST_DEVICE inline Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
 };
 
 template<typename Problem>
@@ -103,11 +106,11 @@ public:
 
 private:
     // Evaluate RHS f(t, y) into out
-    static INTEGRATORS_HOST_DEVICE inline void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
         Problem::rhs(t, y, out);
     }
 
-    static INTEGRATORS_HOST_DEVICE inline void trace_deuterium_state(const char* event,
+    static INTEGRATORS_HOST_DEVICE void trace_deuterium_state(const char* event,
                                                                      const State& s,
                                                                      const std::array<Real, N>& y,
                                                                      const std::array<Real, N>* f,
@@ -151,7 +154,7 @@ private:
 #endif
     }
 
-    static INTEGRATORS_HOST_DEVICE inline void clean_state_vector(State& s) {
+    static INTEGRATORS_HOST_DEVICE void clean_state_vector(State& s) {
         if (!s.clean_constrained_components) return;
 
         const int constrained_components = std::min<int>(s.constrained_components, static_cast<int>(N));
@@ -161,21 +164,21 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE inline void rhs_state(Real t, State& s, std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE void rhs_state(Real t, State& s, std::array<Real, N>& out) {
         clean_state_vector(s);
         rhs(t, s.y, out);
     }
 
     // Evaluate analytic Jacobian if available
-    static INTEGRATORS_HOST_DEVICE inline void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
+    static INTEGRATORS_HOST_DEVICE void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
         Problem::jacobian(t, y, J);
     }
 
-    static INTEGRATORS_HOST_DEVICE inline Real rtol_for(const State& s, size_type i) {
+    static INTEGRATORS_HOST_DEVICE Real rtol_for(const State& s, size_type i) {
         return s.use_vector_tolerances ? s.rtol_vec[i] : s.rtol;
     }
 
-    static INTEGRATORS_HOST_DEVICE inline Real atol_for(const State& s, size_type i) {
+    static INTEGRATORS_HOST_DEVICE Real atol_for(const State& s, size_type i) {
         return s.use_vector_tolerances ? s.atol_vec[i] : s.atol;
     }
 
@@ -317,6 +320,9 @@ private:
             s.jacobian[i][i] += 1.0;
         }
         int ier = linalg::lu_decomposition<N, true>(s.jacobian, s.pivot);
+        if (ier == 0) {
+            s.n_decomp += 1;
+        }
         s.JCUR = 1;
         return ier;
     }
@@ -376,6 +382,7 @@ private:
                 }
 
                 linalg::lu_solve<N, true>(s.jacobian, s.pivot, delta);
+                s.n_solve += 1;
 
                 if (s.RC != 1.0) {
                     const Real CSCALE = 2.0 / (1.0 + s.RC);
@@ -694,6 +701,7 @@ private:
             }
 
             kflag -= 1;
+            s.n_error_fails += 1;
             NFLAG = -2;
             s.tn = TOLD;
             retract_nordsieck(s);
@@ -803,7 +811,8 @@ public:
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
         // Initialize
-        s.tn = s.t; s.n_step = 0; s.n_jac = 0; s.NSLJ = 0;
+        s.tn = s.t; s.n_step = 0; s.n_jac = 0; s.n_decomp = 0; s.n_solve = 0;
+        s.n_error_fails = 0; s.NSLJ = 0;
 
         // Initial RHS and load yh(:,2)
         rhs_state(s.t, s, s.savf);

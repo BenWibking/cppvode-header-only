@@ -28,9 +28,63 @@
 #define PRIMORDIAL_CHEM_PROBE_HOST_DEVICE
 #endif
 
+#ifndef PRIMORDIAL_CHEM_ROS2S_COMPACT_ANALYTIC_JACOBIAN
+#define PRIMORDIAL_CHEM_ROS2S_COMPACT_ANALYTIC_JACOBIAN 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_SPECIALIZE_STATS
+#define PRIMORDIAL_CHEM_ROS2S_SPECIALIZE_STATS 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_ALLOW_PIVOTING
+#define PRIMORDIAL_CHEM_ROS2S_ALLOW_PIVOTING 1
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_GIFT_FACTORIZATION
+#define PRIMORDIAL_CHEM_ROS2S_GIFT_FACTORIZATION 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_EXTERNAL_MATRIX
+#define PRIMORDIAL_CHEM_ROS2S_EXTERNAL_MATRIX 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_COMPACT_RHS_SCRATCH
+#define PRIMORDIAL_CHEM_ROS2S_COMPACT_RHS_SCRATCH 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ROS2S_STATIC_TOLERANCES
+#define PRIMORDIAL_CHEM_ROS2S_STATIC_TOLERANCES 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_ACTIVE_KERNELS_ONLY
+#define PRIMORDIAL_CHEM_ACTIVE_KERNELS_ONLY 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS
+#define PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS 0
+#endif
+
+#ifndef PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_MIN_BLOCKS
+#define PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_MIN_BLOCKS 0
+#endif
+
+#if defined(__CUDACC__) && PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS > 0 &&                 \
+    PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_MIN_BLOCKS > 0
+#define PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS                                                  \
+    __launch_bounds__(PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS,                           \
+                      PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_MIN_BLOCKS)
+#elif defined(__CUDACC__) && PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS > 0
+#define PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS                                                  \
+    __launch_bounds__(PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS_THREADS)
+#else
+#define PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS
+#endif
+
 namespace pc = integrators::primordial_chem;
 
 namespace {
+
+using RODASMatrix = std::array<std::array<integrators::Real, pc::neqs>, pc::neqs>;
 
 constexpr integrators::Real tff_reduc = 1.0e-1;
 constexpr int nsteps = 1000;
@@ -41,25 +95,77 @@ constexpr integrators::Real rtol_enuc = 1.0e-6;
 constexpr integrators::Real atol_enuc = 1.0e-6;
 constexpr integrators::Real reference_thermodynamic_rtol = 1.0e-4;
 constexpr int default_grid_dim = 1;
-constexpr int cuda_threads_per_block = 128;
+constexpr int default_cuda_threads_per_block = 128;
 constexpr int perturbation_interval = 20;
 constexpr integrators::Real perturbation_amplitude = 0.1;
 constexpr integrators::Real state_validity_floor_slop = 10.0;
+constexpr bool compact_ros2s_analytic_jacobian =
+    PRIMORDIAL_CHEM_ROS2S_COMPACT_ANALYTIC_JACOBIAN != 0;
+constexpr bool specialize_ros2s_stats = PRIMORDIAL_CHEM_ROS2S_SPECIALIZE_STATS != 0;
+constexpr bool ros2s_allow_pivoting = PRIMORDIAL_CHEM_ROS2S_ALLOW_PIVOTING != 0;
+constexpr bool ros2s_gift_factorization = PRIMORDIAL_CHEM_ROS2S_GIFT_FACTORIZATION != 0;
+constexpr bool ros2s_external_matrix = PRIMORDIAL_CHEM_ROS2S_EXTERNAL_MATRIX != 0;
+constexpr bool ros2s_compact_rhs_scratch = PRIMORDIAL_CHEM_ROS2S_COMPACT_RHS_SCRATCH != 0;
+constexpr bool ros2s_static_tolerances = PRIMORDIAL_CHEM_ROS2S_STATIC_TOLERANCES != 0;
+constexpr bool active_kernels_only = PRIMORDIAL_CHEM_ACTIVE_KERNELS_ONLY != 0;
+
+struct ToleranceConfig {
+    integrators::Real rtol_spec_value{rtol_spec};
+    integrators::Real atol_spec_value{atol_spec};
+    integrators::Real rtol_enuc_value{rtol_enuc};
+    integrators::Real atol_enuc_value{atol_enuc};
+};
+
+ToleranceConfig runtime_tolerances{};
+
+INTEGRATORS_HOST_DEVICE integrators::Real active_rtol_spec() {
+#if defined(__CUDA_ARCH__)
+    return rtol_spec;
+#else
+    return runtime_tolerances.rtol_spec_value;
+#endif
+}
+
+INTEGRATORS_HOST_DEVICE integrators::Real active_atol_spec() {
+#if defined(__CUDA_ARCH__)
+    return atol_spec;
+#else
+    return runtime_tolerances.atol_spec_value;
+#endif
+}
+
+INTEGRATORS_HOST_DEVICE integrators::Real active_rtol_enuc() {
+#if defined(__CUDA_ARCH__)
+    return rtol_enuc;
+#else
+    return runtime_tolerances.rtol_enuc_value;
+#endif
+}
+
+INTEGRATORS_HOST_DEVICE integrators::Real active_atol_enuc() {
+#if defined(__CUDA_ARCH__)
+    return atol_enuc;
+#else
+    return runtime_tolerances.atol_enuc_value;
+#endif
+}
 
 enum class IntegratorChoice {
     VODE,
-    RODAS
+    ROS2S
 };
 
 constexpr std::array<integrators::Real, pc::NumSpec> initial_number_densities{
     1.0e-4, 1.0e-4, 1.0e0,  1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40,
     1.0e-40, 1.0e-6, 1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40, 0.0775};
 
+// Reference generated with ROS2S, analytic Jacobian, --rtol 1e-9 --atol 1e-10.
 constexpr std::array<integrators::Real, pc::NumSpec> reference_number_densities{
-    19911.96049,      19897.56689,      1.61920532e17, 1.780427462, 1.0e-100,
-    0.9313391106,     16.17402851,      1.0e-100,      3.378785985e17,
-    1.0e-100,         8.912464329,      2.624158281e-60, 6.363655862e-12,
-    6.491340291e16};
+    19898.111435054092,    19883.725397617425,    1.6186350992258595e17,
+    1.7789352113556338,   6.3053138754138041e-12, 33.348889152618248,
+    16.164972648007762,   1.0000000000015343e-100, 3.379071096392231e17,
+    5.3122299092018002e-19, 319.268056479172,     2.7107590622924508e-60,
+    6.3498970553404515e-12, 6.4913402847062456e16};
 
 // Reference comparison tolerances. The deuterium channels are especially
 // sensitive to fused multiply-add contraction in the generated chemistry rates.
@@ -71,9 +177,9 @@ constexpr std::array<bool, pc::NumSpec> deuterium_bearing_species{
     false, false, false, false, true, true, false,
     true,  false, true,  true,  false, false, false};
 
-constexpr integrators::Real reference_temperature = 3032.992479;
-constexpr integrators::Real reference_eint = 2.721837163e11;
-constexpr integrators::Real reference_rho = 1.836285633e-6;
+constexpr integrators::Real reference_temperature = 3032.8601488545046;
+constexpr integrators::Real reference_eint = 2.7216856652474249e11;
+constexpr integrators::Real reference_rho = 1.836285633166796e-6;
 
 struct CollapseResult {
     pc::burn_t initial_state{};
@@ -84,12 +190,38 @@ struct CollapseResult {
     integrators::IntegratorResult result{integrators::IntegratorResult::SUCCESS};
 };
 
+struct IntegratorWorkStats {
+    std::uint64_t internal_steps{};
+    std::uint64_t rhs_calls{};
+    std::uint64_t jacobian_calls{};
+    std::uint64_t decompositions{};
+    std::uint64_t linear_solves{};
+    std::uint64_t accepted_steps{};
+    std::uint64_t rejected_steps{};
+    std::uint64_t error_failures{};
+};
+
+struct PrimordialChemRos2sStaticTolerances : pc::PrimordialChem {
+    INTEGRATORS_HOST_DEVICE static constexpr integrators::Real ros2s_rtol(integrators::size_type i) {
+        return i == pc::NumSpec ? rtol_enuc : rtol_spec;
+    }
+
+    INTEGRATORS_HOST_DEVICE static constexpr integrators::Real ros2s_atol(integrators::size_type i) {
+        return i == pc::NumSpec ? atol_enuc : atol_spec;
+    }
+};
+
+using Ros2sProblem = std::conditional_t<ros2s_static_tolerances,
+                                        PrimordialChemRos2sStaticTolerances,
+                                        pc::PrimordialChem>;
+
 struct CollapseState {
     pc::burn_t initial_state{};
     pc::burn_t state{};
     integrators::Real time{};
     integrators::Real density_driver{};
     int completed_steps{};
+    IntegratorWorkStats integrator_work{};
 };
 
 struct CollapseStepResult {
@@ -103,6 +235,8 @@ struct Diagnostics {
     bool trace_vode{};
     bool probe_deuterium_terms{};
     bool dump_history{};
+    bool dump_final_state{};
+    bool integrator_stats{};
     int trace_cell_id{-1};
     int trace_step{-1};
 };
@@ -331,20 +465,26 @@ struct BatchStatus {
 };
 
 constexpr std::string_view integrator_name(IntegratorChoice choice) {
-    return choice == IntegratorChoice::VODE ? "VODE" : "RODAS";
+    switch (choice) {
+    case IntegratorChoice::VODE:
+        return "VODE";
+    case IntegratorChoice::ROS2S:
+    default:
+        return "ROS2S";
+    }
 }
 
 INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::VODEState<pc::neqs>& state) {
     state.use_vector_tolerances = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
-        state.rtol_vec[static_cast<std::size_t>(n)] = rtol_spec;
-        state.atol_vec[static_cast<std::size_t>(n)] = atol_spec;
+        state.rtol_vec[static_cast<std::size_t>(n)] = active_rtol_spec();
+        state.atol_vec[static_cast<std::size_t>(n)] = active_atol_spec();
     }
-    state.rtol_vec[pc::NumSpec] = rtol_enuc;
-    state.atol_vec[pc::NumSpec] = atol_enuc;
-    state.rtol = rtol_spec;
-    state.atol = atol_spec;
-    state.max_steps = 150000;
+    state.rtol_vec[pc::NumSpec] = active_rtol_enuc();
+    state.atol_vec[pc::NumSpec] = active_atol_enuc();
+    state.rtol = active_rtol_spec();
+    state.atol = active_atol_spec();
+    state.max_steps = 10000000;
     state.HMXI = 1.0e-30;
     state.constrained_components = pc::NumSpec;
     state.reject_change_buffer = 1.0e100;
@@ -353,22 +493,29 @@ INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::VODE
     state.component_floor = pc::small_number_density_floor();
 }
 
-INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(integrators::RODASState<pc::neqs>& state) {
-    state.use_vector_tolerances = true;
-    for (int n = 0; n < pc::NumSpec; ++n) {
-        state.rtol_vec[static_cast<std::size_t>(n)] = rtol_spec;
-        state.atol_vec[static_cast<std::size_t>(n)] = atol_spec;
+template<bool AnalyticJacobianOnly, bool ExternalMatrixStorage, bool IncludeRhsScratch,
+         bool StaticTolerances, bool CollectStats>
+INTEGRATORS_HOST_DEVICE void configure_microphysics_tolerances(
+    integrators::RODASState<pc::neqs, AnalyticJacobianOnly, ExternalMatrixStorage,
+                            IncludeRhsScratch, StaticTolerances, CollectStats>& state) {
+    if constexpr (!StaticTolerances) {
+        state.use_vector_tolerances = true;
+        for (int n = 0; n < pc::NumSpec; ++n) {
+            state.rtol_vec[static_cast<std::size_t>(n)] = active_rtol_spec();
+            state.atol_vec[static_cast<std::size_t>(n)] = active_atol_spec();
+        }
+        state.rtol_vec[pc::NumSpec] = active_rtol_enuc();
+        state.atol_vec[pc::NumSpec] = active_atol_enuc();
+        state.rtol = active_rtol_spec();
+        state.atol = active_atol_spec();
     }
-    state.rtol_vec[pc::NumSpec] = rtol_enuc;
-    state.atol_vec[pc::NumSpec] = atol_enuc;
-    state.rtol = rtol_spec;
-    state.atol = atol_spec;
-    state.max_steps = 150000;
+    state.max_steps = 10000000;
 }
 
 INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_vode(pc::burn_t& state, integrators::Real dt,
                                                                       bool finite_difference_jacobian,
-                                                                      bool trace_vode) {
+                                                                      bool trace_vode,
+                                                                      IntegratorWorkStats* stats) {
     pc::eos_rt(state);
 
     auto integrator = integrators::VODE<pc::PrimordialChem>{};
@@ -386,6 +533,14 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_vode(pc::burn_t&
 
     pc::PrimordialChem::state_type problem_state{};
     const auto result = integrator.integrate(problem_state, vode_state);
+    if (stats != nullptr) {
+        stats->internal_steps += static_cast<std::uint64_t>(std::max(0, vode_state.n_step));
+        stats->rhs_calls += static_cast<std::uint64_t>(std::max(0, vode_state.n_rhs));
+        stats->jacobian_calls += static_cast<std::uint64_t>(std::max(0, vode_state.n_jac));
+        stats->decompositions += static_cast<std::uint64_t>(std::max(0, vode_state.n_decomp));
+        stats->linear_solves += static_cast<std::uint64_t>(std::max(0, vode_state.n_solve));
+        stats->error_failures += static_cast<std::uint64_t>(std::max(0, vode_state.n_error_fails));
+    }
 
     if (result == integrators::IntegratorResult::SUCCESS) {
         for (int n = 0; n < pc::NumSpec; ++n) {
@@ -418,32 +573,59 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_vode(pc::burn_t&
     return result;
 }
 
-INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_rodas(pc::burn_t& state, integrators::Real dt,
-                                                                       bool finite_difference_jacobian) {
+template<bool FiniteDifferenceJacobian, bool CollectStats>
+INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t& state, integrators::Real dt,
+                                                                       IntegratorWorkStats* stats,
+                                                                       RODASMatrix* external_matrix) {
     pc::eos_rt(state);
 
-    auto integrator = integrators::RODAS<pc::PrimordialChem>{};
-    auto rodas_state = integrators::RODASState<pc::neqs>{};
-    configure_microphysics_tolerances(rodas_state);
-
-    rodas_state.t = 0.0;
-    rodas_state.tout = dt;
-    rodas_state.dt = dt;
-    rodas_state.jacobian_analytic = !finite_difference_jacobian;
-    rodas_state.autonomous = true;
-    for (int n = 0; n < pc::NumSpec; ++n) {
-        rodas_state.y[static_cast<std::size_t>(n)] = state.xn[static_cast<std::size_t>(n)];
+    constexpr bool analytic_jacobian_only =
+        !FiniteDifferenceJacobian && compact_ros2s_analytic_jacobian;
+    constexpr bool external_matrix_storage =
+        !FiniteDifferenceJacobian && ros2s_external_matrix;
+    auto integrator =
+        integrators::RODAS<Ros2sProblem, analytic_jacobian_only, CollectStats,
+                           ros2s_allow_pivoting, ros2s_gift_factorization,
+                           external_matrix_storage, ros2s_compact_rhs_scratch,
+                           ros2s_static_tolerances>{};
+    auto ros2s_state =
+        typename decltype(integrator)::State{};
+    if constexpr (external_matrix_storage) {
+        ros2s_state.external_e = external_matrix;
+    } else {
+        (void)external_matrix;
     }
-    rodas_state.y[pc::NumSpec] = state.e;
+    configure_microphysics_tolerances(ros2s_state);
 
-    pc::PrimordialChem::state_type problem_state{};
-    const auto result = integrator.integrate(problem_state, rodas_state);
+    ros2s_state.t = 0.0;
+    ros2s_state.tout = dt;
+    ros2s_state.dt = dt;
+    ros2s_state.jacobian_analytic = !FiniteDifferenceJacobian;
+    ros2s_state.autonomous = true;
+    for (int n = 0; n < pc::NumSpec; ++n) {
+        ros2s_state.y[static_cast<std::size_t>(n)] = state.xn[static_cast<std::size_t>(n)];
+    }
+    ros2s_state.y[pc::NumSpec] = state.e;
+
+    typename Ros2sProblem::state_type problem_state{};
+    const auto result = integrator.integrate(problem_state, ros2s_state);
+    if constexpr (CollectStats) {
+        if (stats != nullptr) {
+            stats->internal_steps += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_step));
+            stats->rhs_calls += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_rhs));
+            stats->jacobian_calls += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_jac));
+            stats->decompositions += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_decomp));
+            stats->linear_solves += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_solve));
+            stats->accepted_steps += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_accept));
+            stats->rejected_steps += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_reject));
+        }
+    }
 
     if (result == integrators::IntegratorResult::SUCCESS) {
         for (int n = 0; n < pc::NumSpec; ++n) {
-            state.xn[static_cast<std::size_t>(n)] = rodas_state.y[static_cast<std::size_t>(n)];
+            state.xn[static_cast<std::size_t>(n)] = ros2s_state.y[static_cast<std::size_t>(n)];
         }
-        state.e = rodas_state.y[pc::NumSpec];
+        state.e = ros2s_state.y[pc::NumSpec];
         state.success = true;
     } else {
         state.success = false;
@@ -452,16 +634,50 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_rodas(pc::burn_t
     return result;
 }
 
+INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t& state, integrators::Real dt,
+                                                                       bool finite_difference_jacobian,
+                                                                       IntegratorWorkStats* stats,
+                                                                       RODASMatrix* external_matrix) {
+    if (finite_difference_jacobian) {
+        if (stats != nullptr) {
+            return burn_once_ros2s<true, true>(state, dt, stats, external_matrix);
+        }
+        return burn_once_ros2s<true, false>(state, dt, stats, external_matrix);
+    }
+    if (stats != nullptr) {
+        return burn_once_ros2s<false, true>(state, dt, stats, external_matrix);
+    }
+    return burn_once_ros2s<false, false>(state, dt, stats, external_matrix);
+}
+
 INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, integrators::Real dt,
                                                            bool finite_difference_jacobian,
                                                            bool trace_vode,
-                                                           IntegratorChoice integrator_choice) {
+                                                           IntegratorChoice integrator_choice,
+                                                           IntegratorWorkStats* stats,
+                                                           RODASMatrix* external_matrix) {
     switch (integrator_choice) {
     case IntegratorChoice::VODE:
-        return burn_once_vode(state, dt, finite_difference_jacobian, trace_vode);
-    case IntegratorChoice::RODAS:
+        (void)external_matrix;
+        return burn_once_vode(state, dt, finite_difference_jacobian, trace_vode, stats);
+    case IntegratorChoice::ROS2S:
     default:
-        return burn_once_rodas(state, dt, finite_difference_jacobian);
+        return burn_once_ros2s(state, dt, finite_difference_jacobian, stats, external_matrix);
+    }
+}
+
+template<IntegratorChoice Choice, bool FiniteDifferenceJacobian, bool CollectStats>
+INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, integrators::Real dt,
+                                                           bool trace_vode,
+                                                           IntegratorWorkStats* stats,
+                                                           RODASMatrix* external_matrix) {
+    if constexpr (Choice == IntegratorChoice::VODE) {
+        (void)external_matrix;
+        return burn_once_vode(state, dt, FiniteDifferenceJacobian, trace_vode, stats);
+    } else if constexpr (Choice == IntegratorChoice::ROS2S) {
+        (void)trace_vode;
+        return burn_once_ros2s<FiniteDifferenceJacobian, CollectStats>(
+            state, dt, stats, external_matrix);
     }
 }
 
@@ -517,11 +733,24 @@ INTEGRATORS_HOST_DEVICE void apply_cell_perturbation(CollapseState& collapse, in
     pc::eos_re(collapse.state);
 }
 
+PRIMORDIAL_CHEM_PROBE_HOST_DEVICE void add_integrator_work(IntegratorWorkStats& total,
+                                                           const IntegratorWorkStats& step) {
+    total.internal_steps += step.internal_steps;
+    total.rhs_calls += step.rhs_calls;
+    total.jacobian_calls += step.jacobian_calls;
+    total.decompositions += step.decompositions;
+    total.linear_solves += step.linear_solves;
+    total.accepted_steps += step.accepted_steps;
+    total.rejected_steps += step.rejected_steps;
+    total.error_failures += step.error_failures;
+}
+
 INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& collapse, int step, int cell,
                                                                  bool perturb_cells,
                                                                  bool finite_difference_jacobian,
                                                                  Diagnostics diagnostics,
-                                                                 IntegratorChoice integrator_choice) {
+                                                                 IntegratorChoice integrator_choice,
+                                                                 RODASMatrix* external_matrix) {
     apply_cell_perturbation(collapse, step, cell, perturb_cells);
 
     const integrators::Real dd1 = collapse.density_driver;
@@ -561,8 +790,86 @@ INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& 
 
     const bool trace_vode = diagnostics.trace_vode && cell == diagnostics.trace_cell_id &&
                             step == diagnostics.trace_step;
+    IntegratorWorkStats step_stats{};
     const auto result = burn(collapse.state, dt, finite_difference_jacobian,
-                             trace_vode, integrator_choice);
+                             trace_vode, integrator_choice,
+                             diagnostics.integrator_stats ? &step_stats : nullptr,
+                             external_matrix);
+    if (diagnostics.integrator_stats) {
+        add_integrator_work(collapse.integrator_work, step_stats);
+    }
+    if (result != integrators::IntegratorResult::SUCCESS) {
+        return {true, step, result};
+    }
+
+    pc::floor_and_normalize_number_densities(collapse.state);
+    pc::balance_charge(collapse.state);
+    pc::floor_and_normalize_number_densities(collapse.state);
+    pc::eos_re(collapse.state);
+
+    collapse.time += dt;
+    collapse.completed_steps += 1;
+    return {false, -1, integrators::IntegratorResult::SUCCESS};
+}
+
+template<IntegratorChoice Choice, bool FiniteDifferenceJacobian, bool CollectStats>
+INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& collapse, int step, int cell,
+                                                                 bool perturb_cells,
+                                                                 Diagnostics diagnostics,
+                                                                 RODASMatrix* external_matrix) {
+    apply_cell_perturbation(collapse, step, cell, perturb_cells);
+
+    const integrators::Real dd1 = collapse.density_driver;
+    const integrators::Real rhotmp = pc::density(collapse.state.xn);
+    const integrators::Real tff = std::sqrt(pc::pi * 3.0 / (32.0 * rhotmp * pc::grav_constant));
+    const integrators::Real dt = tff_reduc * tff;
+
+    collapse.density_driver += dt * (collapse.density_driver / tff);
+
+    if (dt < 10.0 || collapse.density_driver > 2.0e-6) {
+        return {true, -1, integrators::IntegratorResult::SUCCESS};
+    }
+
+    const integrators::Real density_ratio = collapse.density_driver / dd1;
+    for (auto& xn : collapse.state.xn) {
+        xn *= density_ratio;
+    }
+    collapse.state.rho *= density_ratio;
+
+    if (diagnostics.trace_pre_burn && cell == diagnostics.trace_cell_id &&
+        step == diagnostics.trace_step) {
+#if !defined(__CUDA_ARCH__)
+        std::cout << "trace pre-burn state: cell-id " << cell << " collapse step " << step << "\n";
+        std::cout << "completed steps: " << collapse.completed_steps << "\n";
+        std::cout << "time: " << collapse.time << "\n";
+        std::cout << "dt: " << dt << "\n";
+        std::cout << "density driver: " << collapse.density_driver << "\n";
+        std::cout << "rho: " << collapse.state.rho << "\n";
+        std::cout << "T: " << collapse.state.T << "\n";
+        std::cout << "Eint: " << collapse.state.e << "\n";
+        for (int n = 0; n < pc::NumSpec; ++n) {
+            std::cout << "  " << pc::short_spec_names[static_cast<std::size_t>(n)] << ": "
+                      << collapse.state.xn[static_cast<std::size_t>(n)] << "\n";
+        }
+#endif
+    }
+
+    const bool trace_vode = diagnostics.trace_vode && cell == diagnostics.trace_cell_id &&
+                            step == diagnostics.trace_step;
+    IntegratorWorkStats step_stats{};
+    IntegratorWorkStats* step_stats_ptr = nullptr;
+    if constexpr (CollectStats) {
+        if (diagnostics.integrator_stats) {
+            step_stats_ptr = &step_stats;
+        }
+    }
+    const auto result = burn<Choice, FiniteDifferenceJacobian, CollectStats>(
+        collapse.state, dt, trace_vode, step_stats_ptr, external_matrix);
+    if constexpr (CollectStats) {
+        if (diagnostics.integrator_stats) {
+            add_integrator_work(collapse.integrator_work, step_stats);
+        }
+    }
     if (result != integrators::IntegratorResult::SUCCESS) {
         return {true, step, result};
     }
@@ -590,22 +897,31 @@ __global__ void initialize_collapse_kernel(CollapseState* cells,
     cell_results[cell] = {};
 }
 
-__global__ void collapse_step_kernel(CollapseState* cells,
-                                     CollapseStepResult* cell_results,
-                                     int step,
-                                     int num_cells,
-                                     int cell_id_offset,
-                                     bool perturb_cells,
-                                     bool finite_difference_jacobian,
-                                     Diagnostics diagnostics,
-                                     IntegratorChoice integrator_choice) {
+template<IntegratorChoice Choice, bool FiniteDifferenceJacobian, bool CollectStats>
+PRIMORDIAL_CHEM_COLLAPSE_LAUNCH_BOUNDS __global__
+void collapse_step_kernel(CollapseState* cells,
+                          CollapseStepResult* cell_results,
+                          RODASMatrix* ros2s_matrices,
+                          int step,
+                          int num_cells,
+                          int cell_id_offset,
+                          bool perturb_cells,
+                          Diagnostics diagnostics) {
     const int cell = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (cell >= num_cells || cell_results[cell].stop) {
         return;
     }
 
-    cell_results[cell] = advance_collapse_step(cells[cell], step, cell + cell_id_offset, perturb_cells,
-                                               finite_difference_jacobian, diagnostics, integrator_choice);
+    RODASMatrix* external_matrix = nullptr;
+    if constexpr (Choice == IntegratorChoice::ROS2S && !FiniteDifferenceJacobian &&
+                  ros2s_external_matrix) {
+        external_matrix = &ros2s_matrices[cell];
+    } else {
+        (void)ros2s_matrices;
+    }
+
+    cell_results[cell] = advance_collapse_step<Choice, FiniteDifferenceJacobian, CollectStats>(
+        cells[cell], step, cell + cell_id_offset, perturb_cells, diagnostics, external_matrix);
 }
 
 __global__ void deuterium_probe_kernel(const pc::burn_t* states,
@@ -649,11 +965,24 @@ bool parse_nonnegative_int(const char* text, int& value) {
     return true;
 }
 
+bool parse_positive_real(const char* text, integrators::Real& value) {
+    errno = 0;
+    char* end = nullptr;
+    const auto parsed = std::strtod(text, &end);
+    if (errno != 0 || end == text || *end != '\0' || parsed <= 0.0 ||
+        !std::isfinite(parsed)) {
+        return false;
+    }
+    value = static_cast<integrators::Real>(parsed);
+    return true;
+}
+
 void print_usage(const char* program) {
     std::cerr << "usage: " << program
-              << " [--grid N] [--integrator vode|rodas] [--perturb] [--fd-jacobian]"
+              << " [--grid N] [--integrator vode|ros2s] [--perturb] [--fd-jacobian]"
               << " [--cell-id N] [--trace-vode] [--trace-step N] [--trace-cell-id N]"
-              << " [--probe-deuterium-terms] [--dump-history]\n";
+              << " [--probe-deuterium-terms] [--dump-history] [--dump-final-state] [--integrator-stats]"
+              << " [--threads-per-block N] [--rtol X] [--atol X]\n";
 }
 
 bool parse_integrator(std::string_view text, IntegratorChoice& integrator_choice) {
@@ -661,8 +990,8 @@ bool parse_integrator(std::string_view text, IntegratorChoice& integrator_choice
         integrator_choice = IntegratorChoice::VODE;
         return true;
     }
-    if (text == "rodas") {
-        integrator_choice = IntegratorChoice::RODAS;
+    if (text == "ros2s" || text == "rodas") {
+        integrator_choice = IntegratorChoice::ROS2S;
         return true;
     }
     return false;
@@ -670,13 +999,14 @@ bool parse_integrator(std::string_view text, IntegratorChoice& integrator_choice
 
 bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrator_choice,
                 bool& perturb_cells, bool& finite_difference_jacobian, int& cell_id_offset,
-                Diagnostics& diagnostics) {
+                Diagnostics& diagnostics, int& threads_per_block) {
     grid_dim = default_grid_dim;
-    integrator_choice = IntegratorChoice::RODAS;
+    integrator_choice = IntegratorChoice::ROS2S;
     perturb_cells = false;
     finite_difference_jacobian = false;
     cell_id_offset = 0;
     diagnostics = {};
+    threads_per_block = default_cuda_threads_per_block;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg{argv[i]};
         if (arg == "--help" || arg == "-h") {
@@ -728,6 +1058,41 @@ bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrat
             diagnostics.dump_history = true;
             continue;
         }
+        if (arg == "--dump-final-state") {
+            diagnostics.dump_final_state = true;
+            continue;
+        }
+        if (arg == "--integrator-stats") {
+            diagnostics.integrator_stats = true;
+            continue;
+        }
+        if (arg == "--threads-per-block") {
+            if (i + 1 >= argc || !parse_positive_int(argv[++i], threads_per_block)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            continue;
+        }
+        if (arg == "--rtol") {
+            integrators::Real parsed = 0.0;
+            if (i + 1 >= argc || !parse_positive_real(argv[++i], parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            runtime_tolerances.rtol_spec_value = parsed;
+            runtime_tolerances.rtol_enuc_value = parsed * (rtol_enuc / rtol_spec);
+            continue;
+        }
+        if (arg == "--atol") {
+            integrators::Real parsed = 0.0;
+            if (i + 1 >= argc || !parse_positive_real(argv[++i], parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            runtime_tolerances.atol_spec_value = parsed;
+            runtime_tolerances.atol_enuc_value = parsed;
+            continue;
+        }
         if (arg == "--trace-step") {
             if (i + 1 >= argc || !parse_nonnegative_int(argv[++i], diagnostics.trace_step)) {
                 print_usage(argv[0]);
@@ -764,6 +1129,36 @@ bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrat
                 print_usage(argv[0]);
                 return false;
             }
+            continue;
+        }
+        constexpr std::string_view threads_prefix = "--threads-per-block=";
+        if (arg.rfind(threads_prefix, 0) == 0) {
+            if (!parse_positive_int(argv[i] + threads_prefix.size(), threads_per_block)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            continue;
+        }
+        constexpr std::string_view rtol_prefix = "--rtol=";
+        if (arg.rfind(rtol_prefix, 0) == 0) {
+            integrators::Real parsed = 0.0;
+            if (!parse_positive_real(argv[i] + rtol_prefix.size(), parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            runtime_tolerances.rtol_spec_value = parsed;
+            runtime_tolerances.rtol_enuc_value = parsed * (rtol_enuc / rtol_spec);
+            continue;
+        }
+        constexpr std::string_view atol_prefix = "--atol=";
+        if (arg.rfind(atol_prefix, 0) == 0) {
+            integrators::Real parsed = 0.0;
+            if (!parse_positive_real(argv[i] + atol_prefix.size(), parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
+            runtime_tolerances.atol_spec_value = parsed;
+            runtime_tolerances.atol_enuc_value = parsed;
             continue;
         }
 
@@ -926,18 +1321,33 @@ int main(int argc, char** argv) {
     std::cout << "======================================\n\n";
 
     int grid_dim = default_grid_dim;
-    IntegratorChoice integrator_choice = IntegratorChoice::RODAS;
+    IntegratorChoice integrator_choice = IntegratorChoice::ROS2S;
     bool perturb_cells = false;
     bool finite_difference_jacobian = false;
     int cell_id_offset = 0;
+    int threads_per_block = default_cuda_threads_per_block;
     Diagnostics diagnostics{};
     if (!parse_args(argc, argv, grid_dim, integrator_choice, perturb_cells,
-                    finite_difference_jacobian, cell_id_offset, diagnostics)) {
+                    finite_difference_jacobian, cell_id_offset, diagnostics,
+                    threads_per_block)) {
         return 1;
     }
     if (diagnostics.probe_deuterium_terms) {
         return run_deuterium_probe();
     }
+#if defined(__CUDACC__)
+    if constexpr (active_kernels_only) {
+        if (finite_difference_jacobian) {
+            std::cerr << "This build only includes analytic CUDA kernels; --fd-jacobian is unavailable.\n";
+            return 1;
+        }
+        if (diagnostics.integrator_stats) {
+            std::cerr << "This build only includes the no-stats ROS2S CUDA kernel; "
+                         "--integrator-stats is unavailable.\n";
+            return 1;
+        }
+    }
+#endif
     int num_cells = 0;
     if (!checked_cell_count(grid_dim, num_cells)) {
         std::cerr << "grid dimension is too large: " << grid_dim << "\n";
@@ -951,6 +1361,12 @@ int main(int argc, char** argv) {
     BatchStatus batch_status{};
     double collapse_loop_walltime_sec = 0.0;
 #if defined(__CUDACC__)
+    double cuda_step_kernel_walltime_sec = 0.0;
+    double cuda_step_kernel_event_sec = 0.0;
+    double cuda_result_copy_walltime_sec = 0.0;
+    double cuda_history_copy_walltime_sec = 0.0;
+    double host_status_walltime_sec = 0.0;
+    double final_state_copy_walltime_sec = 0.0;
     int device_count = 0;
     cudaError_t err = cudaGetDeviceCount(&device_count);
     if (err == cudaErrorNoDevice || device_count == 0) {
@@ -961,13 +1377,41 @@ int main(int argc, char** argv) {
         std::cerr << "cudaGetDeviceCount failed: " << cudaGetErrorString(err) << "\n";
         return 1;
     }
+    cudaDeviceProp device_prop{};
+    err = cudaGetDeviceProperties(&device_prop, 0);
+    if (err != cudaSuccess) {
+        std::cerr << "cudaGetDeviceProperties failed: " << cudaGetErrorString(err) << "\n";
+        return 1;
+    }
+    if (threads_per_block <= 0 || threads_per_block > device_prop.maxThreadsPerBlock) {
+        std::cerr << "invalid --threads-per-block " << threads_per_block
+                  << " for device max " << device_prop.maxThreadsPerBlock << "\n";
+        return 1;
+    }
 
     CollapseState* device_cells = nullptr;
     CollapseStepResult* device_cell_results = nullptr;
+    RODASMatrix* device_ros2s_matrices = nullptr;
+    cudaEvent_t step_kernel_event_start = nullptr;
+    cudaEvent_t step_kernel_event_stop = nullptr;
+
+    err = cudaEventCreate(&step_kernel_event_start);
+    if (err != cudaSuccess) {
+        std::cerr << "cudaEventCreate start failed: " << cudaGetErrorString(err) << "\n";
+        return 1;
+    }
+    err = cudaEventCreate(&step_kernel_event_stop);
+    if (err != cudaSuccess) {
+        std::cerr << "cudaEventCreate stop failed: " << cudaGetErrorString(err) << "\n";
+        cudaEventDestroy(step_kernel_event_start);
+        return 1;
+    }
 
     err = cudaMalloc(&device_cells, sizeof(CollapseState) * host_cells.size());
     if (err != cudaSuccess) {
         std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
+        cudaEventDestroy(step_kernel_event_stop);
+        cudaEventDestroy(step_kernel_event_start);
         return 1;
     }
 
@@ -975,25 +1419,45 @@ int main(int argc, char** argv) {
     if (err != cudaSuccess) {
         std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err) << "\n";
         cudaFree(device_cells);
+        cudaEventDestroy(step_kernel_event_stop);
+        cudaEventDestroy(step_kernel_event_start);
         return 1;
     }
 
-    const int blocks = (num_cells + cuda_threads_per_block - 1) / cuda_threads_per_block;
-    initialize_collapse_kernel<<<blocks, cuda_threads_per_block>>>(
+    if constexpr (ros2s_external_matrix) {
+        err = cudaMalloc(&device_ros2s_matrices, sizeof(RODASMatrix) * host_cells.size());
+        if (err != cudaSuccess) {
+            std::cerr << "cudaMalloc ROS2S matrix scratch failed: " << cudaGetErrorString(err) << "\n";
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
+            return 1;
+        }
+    }
+
+    const int blocks = (num_cells + threads_per_block - 1) / threads_per_block;
+    initialize_collapse_kernel<<<blocks, threads_per_block>>>(
         device_cells, device_cell_results, num_cells);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         std::cerr << "initialize_collapse_kernel launch failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_ros2s_matrices);
         cudaFree(device_cell_results);
         cudaFree(device_cells);
+        cudaEventDestroy(step_kernel_event_stop);
+        cudaEventDestroy(step_kernel_event_start);
         return 1;
     }
 
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::cerr << "initialize_collapse_kernel execution failed: " << cudaGetErrorString(err) << "\n";
+        cudaFree(device_ros2s_matrices);
         cudaFree(device_cell_results);
         cudaFree(device_cells);
+        cudaEventDestroy(step_kernel_event_stop);
+        cudaEventDestroy(step_kernel_event_start);
         return 1;
     }
 
@@ -1002,15 +1466,101 @@ int main(int argc, char** argv) {
     }
     const auto collapse_loop_start = std::chrono::steady_clock::now();
     for (int n = 0; n < nsteps; ++n) {
-        collapse_step_kernel<<<blocks, cuda_threads_per_block>>>(
-            device_cells, device_cell_results, n, num_cells, cell_id_offset, perturb_cells,
-            finite_difference_jacobian, diagnostics, integrator_choice);
+        const auto step_kernel_start = std::chrono::steady_clock::now();
+        err = cudaEventRecord(step_kernel_event_start);
+        if (err != cudaSuccess) {
+            std::cerr << "cudaEventRecord start failed on step " << n << ": "
+                      << cudaGetErrorString(err) << "\n";
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
+            return 1;
+        }
+        if constexpr (active_kernels_only) {
+            switch (integrator_choice) {
+            case IntegratorChoice::VODE:
+                collapse_step_kernel<IntegratorChoice::VODE, false, true><<<blocks, threads_per_block>>>(
+                    device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                    cell_id_offset, perturb_cells, diagnostics);
+                break;
+            case IntegratorChoice::ROS2S:
+            default:
+                collapse_step_kernel<IntegratorChoice::ROS2S, false, false><<<blocks, threads_per_block>>>(
+                    device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                    cell_id_offset, perturb_cells, diagnostics);
+                break;
+            }
+        } else {
+            switch (integrator_choice) {
+            case IntegratorChoice::VODE:
+                if (finite_difference_jacobian) {
+                    collapse_step_kernel<IntegratorChoice::VODE, true, true><<<blocks, threads_per_block>>>(
+                        device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                        cell_id_offset, perturb_cells, diagnostics);
+                } else {
+                    collapse_step_kernel<IntegratorChoice::VODE, false, true><<<blocks, threads_per_block>>>(
+                        device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                        cell_id_offset, perturb_cells, diagnostics);
+                }
+                break;
+            case IntegratorChoice::ROS2S:
+            default:
+                if (finite_difference_jacobian) {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROS2S, true, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROS2S, true, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROS2S, true, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                } else {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROS2S, false, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROS2S, false, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROS2S, false, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                }
+                break;
+            }
+        }
         err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cerr << "collapse_step_kernel launch failed on step " << n << ": "
                       << cudaGetErrorString(err) << "\n";
             cudaFree(device_cell_results);
             cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
+            return 1;
+        }
+
+        err = cudaEventRecord(step_kernel_event_stop);
+        if (err != cudaSuccess) {
+            std::cerr << "cudaEventRecord stop failed on step " << n << ": "
+                      << cudaGetErrorString(err) << "\n";
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
             return 1;
         }
 
@@ -1020,9 +1570,28 @@ int main(int argc, char** argv) {
                       << cudaGetErrorString(err) << "\n";
             cudaFree(device_cell_results);
             cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
             return 1;
         }
+        float step_kernel_event_ms = 0.0F;
+        err = cudaEventElapsedTime(&step_kernel_event_ms,
+                                   step_kernel_event_start, step_kernel_event_stop);
+        if (err != cudaSuccess) {
+            std::cerr << "cudaEventElapsedTime failed on step " << n << ": "
+                      << cudaGetErrorString(err) << "\n";
+            cudaFree(device_cell_results);
+            cudaFree(device_cells);
+            cudaEventDestroy(step_kernel_event_stop);
+            cudaEventDestroy(step_kernel_event_start);
+            return 1;
+        }
+        cuda_step_kernel_event_sec += static_cast<double>(step_kernel_event_ms) * 1.0e-3;
+        const auto step_kernel_end = std::chrono::steady_clock::now();
+        cuda_step_kernel_walltime_sec +=
+            std::chrono::duration<double>(step_kernel_end - step_kernel_start).count();
 
+        const auto result_copy_start = std::chrono::steady_clock::now();
         err = cudaMemcpy(cell_results.data(), device_cell_results,
                          sizeof(CollapseStepResult) * cell_results.size(),
                          cudaMemcpyDeviceToHost);
@@ -1032,8 +1601,12 @@ int main(int argc, char** argv) {
             cudaFree(device_cells);
             return 1;
         }
+        const auto result_copy_end = std::chrono::steady_clock::now();
+        cuda_result_copy_walltime_sec +=
+            std::chrono::duration<double>(result_copy_end - result_copy_start).count();
 
         if (diagnostics.dump_history) {
+            const auto history_copy_start = std::chrono::steady_clock::now();
             err = cudaMemcpy(host_cells.data(), device_cells,
                              sizeof(CollapseState) * host_cells.size(),
                              cudaMemcpyDeviceToHost);
@@ -1041,12 +1614,21 @@ int main(int argc, char** argv) {
                 std::cerr << "cudaMemcpy history cell failed: " << cudaGetErrorString(err) << "\n";
                 cudaFree(device_cell_results);
                 cudaFree(device_cells);
+                cudaEventDestroy(step_kernel_event_stop);
+                cudaEventDestroy(step_kernel_event_start);
                 return 1;
             }
+            const auto history_copy_end = std::chrono::steady_clock::now();
+            cuda_history_copy_walltime_sec +=
+                std::chrono::duration<double>(history_copy_end - history_copy_start).count();
             print_history_row(n, host_cells.front(), cell_results.front());
         }
 
+        const auto host_status_start = std::chrono::steady_clock::now();
         batch_status = batch_status_from_results(cell_results, n + 1);
+        const auto host_status_end = std::chrono::steady_clock::now();
+        host_status_walltime_sec +=
+            std::chrono::duration<double>(host_status_end - host_status_start).count();
         if (batch_status.failed_cell >= 0 || batch_status.failed_step.stop) {
             break;
         }
@@ -1055,16 +1637,25 @@ int main(int argc, char** argv) {
     collapse_loop_walltime_sec =
         std::chrono::duration<double>(collapse_loop_end - collapse_loop_start).count();
 
+    const auto final_state_copy_start = std::chrono::steady_clock::now();
     err = cudaMemcpy(host_cells.data(), device_cells, sizeof(CollapseState) * host_cells.size(),
                      cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::cerr << "cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
         cudaFree(device_cell_results);
         cudaFree(device_cells);
+        cudaEventDestroy(step_kernel_event_stop);
+        cudaEventDestroy(step_kernel_event_start);
         return 1;
     }
+    const auto final_state_copy_end = std::chrono::steady_clock::now();
+    final_state_copy_walltime_sec =
+        std::chrono::duration<double>(final_state_copy_end - final_state_copy_start).count();
+    cudaFree(device_ros2s_matrices);
     cudaFree(device_cell_results);
     cudaFree(device_cells);
+    cudaEventDestroy(step_kernel_event_stop);
+    cudaEventDestroy(step_kernel_event_start);
 
     std::cout << "integration backend: CUDA per-step kernels, one cell per thread\n";
 #else
@@ -1083,7 +1674,7 @@ int main(int argc, char** argv) {
                     advance_collapse_step(host_cells[cell], n,
                                           static_cast<int>(cell) + cell_id_offset,
                                           perturb_cells, finite_difference_jacobian,
-                                          diagnostics, integrator_choice);
+                                          diagnostics, integrator_choice, nullptr);
             }
         }
 
@@ -1147,11 +1738,17 @@ int main(int argc, char** argv) {
     int min_completed_steps = std::numeric_limits<int>::max();
     int max_completed_steps = 0;
     int first_invalid_cell = -1;
+    std::uint64_t total_completed_steps = 0;
+    IntegratorWorkStats total_integrator_work{};
 
     for (std::size_t cell_index = 0; cell_index < host_cells.size(); ++cell_index) {
         const auto& cell = host_cells[cell_index];
         min_completed_steps = std::min(min_completed_steps, cell.completed_steps);
         max_completed_steps = std::max(max_completed_steps, cell.completed_steps);
+        total_completed_steps += static_cast<std::uint64_t>(std::max(0, cell.completed_steps));
+        if (diagnostics.integrator_stats) {
+            add_integrator_work(total_integrator_work, cell.integrator_work);
+        }
 
         bool cell_physical_pass = cell.completed_steps > 0 &&
                                   std::isfinite(cell.state.T) && cell.state.T > 0.0 &&
@@ -1200,6 +1797,13 @@ int main(int argc, char** argv) {
 
     std::cout << "grid: " << grid_dim << "^3 cells (" << num_cells << " total)\n";
     std::cout << "integrator: " << integrator_name(integrator_choice) << "\n";
+#if defined(__CUDACC__)
+    std::cout << "cuda threads per block: " << threads_per_block << "\n";
+#endif
+    std::cout << "rtol: species=" << active_rtol_spec()
+              << " energy=" << active_rtol_enuc() << "\n";
+    std::cout << "atol: species=" << active_atol_spec()
+              << " energy=" << active_atol_enuc() << "\n";
     std::cout << "jacobian: "
               << (finite_difference_jacobian ? "finite-difference" : "analytic") << "\n";
     std::cout << "cell perturbations: "
@@ -1207,8 +1811,58 @@ int main(int argc, char** argv) {
     std::cout << "completed global kernel/step launches: "
               << batch_status.completed_global_steps << "\n";
     std::cout << "collapse loop walltime: " << collapse_loop_walltime_sec << " s\n";
+#if defined(__CUDACC__)
+    std::cout << "cuda step kernel+synchronize walltime: "
+              << cuda_step_kernel_walltime_sec << " s\n";
+    std::cout << "cuda step kernel event time: "
+              << cuda_step_kernel_event_sec << " s\n";
+    std::cout << "cuda per-step result copy walltime: "
+              << cuda_result_copy_walltime_sec << " s\n";
+    std::cout << "cuda history copy walltime: "
+              << cuda_history_copy_walltime_sec << " s\n";
+    std::cout << "host status reduction walltime: "
+              << host_status_walltime_sec << " s\n";
+    std::cout << "final state copy walltime: "
+              << final_state_copy_walltime_sec << " s\n";
+#endif
     std::cout << "completed collapse steps per cell: "
               << min_completed_steps << "..." << max_completed_steps << "\n";
+    if (diagnostics.integrator_stats) {
+        const auto per_cell = [num_cells](std::uint64_t value) {
+            return static_cast<double>(value) / static_cast<double>(num_cells);
+        };
+        const auto per_completed_step = [total_completed_steps](std::uint64_t value) {
+            return total_completed_steps == 0
+                       ? 0.0
+                       : static_cast<double>(value) / static_cast<double>(total_completed_steps);
+        };
+        std::cout << "integrator work totals: internal_steps=" << total_integrator_work.internal_steps
+                  << " rhs=" << total_integrator_work.rhs_calls
+                  << " jacobian=" << total_integrator_work.jacobian_calls
+                  << " decomp=" << total_integrator_work.decompositions
+                  << " solve=" << total_integrator_work.linear_solves
+                  << " accepted=" << total_integrator_work.accepted_steps
+                  << " rejected=" << total_integrator_work.rejected_steps
+                  << " error_failures=" << total_integrator_work.error_failures << "\n";
+        std::cout << "integrator work per cell: internal_steps="
+                  << per_cell(total_integrator_work.internal_steps)
+                  << " rhs=" << per_cell(total_integrator_work.rhs_calls)
+                  << " jacobian=" << per_cell(total_integrator_work.jacobian_calls)
+                  << " decomp=" << per_cell(total_integrator_work.decompositions)
+                  << " solve=" << per_cell(total_integrator_work.linear_solves)
+                  << " accepted=" << per_cell(total_integrator_work.accepted_steps)
+                  << " rejected=" << per_cell(total_integrator_work.rejected_steps)
+                  << " error_failures=" << per_cell(total_integrator_work.error_failures) << "\n";
+        std::cout << "integrator work per completed collapse step: internal_steps="
+                  << per_completed_step(total_integrator_work.internal_steps)
+                  << " rhs=" << per_completed_step(total_integrator_work.rhs_calls)
+                  << " jacobian=" << per_completed_step(total_integrator_work.jacobian_calls)
+                  << " decomp=" << per_completed_step(total_integrator_work.decompositions)
+                  << " solve=" << per_completed_step(total_integrator_work.linear_solves)
+                  << " accepted=" << per_completed_step(total_integrator_work.accepted_steps)
+                  << " rejected=" << per_completed_step(total_integrator_work.rejected_steps)
+                  << " error_failures=" << per_completed_step(total_integrator_work.error_failures) << "\n";
+    }
     std::cout << "representative cell: " << representative_cell << "\n";
     std::cout << "representative time: " << t << "\n";
     std::cout << "T initial: " << initial_state.T << "\n";
@@ -1225,7 +1879,7 @@ int main(int argc, char** argv) {
     std::cout << "reference comparison: " << (reference_pass ? "PASS" : "FAIL")
               << (perturb_cells ? " (diagnostic for perturbed run)" : "") << "\n";
 
-    if (!pass) {
+    if (!pass || diagnostics.dump_final_state) {
         if (first_invalid_cell >= 0) {
             const auto& invalid = host_cells[static_cast<std::size_t>(first_invalid_cell)];
             std::cout << "\nFirst invalid final state: cell " << first_invalid_cell << "\n";

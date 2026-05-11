@@ -71,6 +71,9 @@ using VODE_Integrator = VODE<Problem>;
 template<typename Problem>
 using RODAS_Integrator = RODAS<Problem>;
 
+template<typename Problem>
+using ROS2S_Integrator = RODAS<Problem>;
+
 } // namespace integrators
 
 #endif // INTEGRATORS_HPP

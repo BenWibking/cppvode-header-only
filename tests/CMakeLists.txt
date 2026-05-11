@@ -40,6 +40,11 @@ add_executable(test_rodas_robertson test_rodas_robertson.cpp)
 target_link_libraries(test_rodas_robertson PRIVATE integrators)
 add_test(NAME rodas_robertson_test COMMAND test_rodas_robertson)
 
+# ROS2S Rosenbrock tableau regression
+add_executable(test_ros2s test_ros2s.cpp)
+target_link_libraries(test_ros2s PRIVATE integrators)
+add_test(NAME ros2s_test COMMAND test_ros2s)
+
 # Linear invariants conservation with VODE
 add_executable(test_vode_linear_invariants test_vode_linear_invariants.cpp)
 target_link_libraries(test_vode_linear_invariants PRIVATE integrators)

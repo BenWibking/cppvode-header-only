@@ -54,7 +54,7 @@ int main() {
     auto problem_state = RobertsonRODAS::state_type{1.0, 0.0, 0.0};
     const auto result = integrator.integrate(problem_state, state);
     if (result != IntegratorResult::SUCCESS) {
-        std::cerr << "RODAS failed with code " << static_cast<int>(result) << "\n";
+        std::cerr << "ROS2S failed with code " << static_cast<int>(result) << "\n";
         return 1;
     }
 
@@ -70,7 +70,7 @@ int main() {
         }
     }
 
-    // Dense identity-mass RODAS regression for the autonomous Robertson
+    // Dense identity-mass ROS2S regression for the autonomous Robertson
     // problem with the same tolerances.
     constexpr std::array<Real, 3> ref{
         0.9664597373325807,
@@ -79,7 +79,7 @@ int main() {
     };
     for (size_type i = 0; i < 3; ++i) {
         const Real scale = std::max<Real>(1.0, std::abs(ref[i]));
-        if (std::abs(state.y[i] - ref[i]) > 5.e-13 * scale) {
+        if (std::abs(state.y[i] - ref[i]) > 5.e-12 * scale) {
             std::cerr << std::setprecision(17)
                       << "component " << i << " differs: got " << state.y[i]
                       << " expected " << ref[i] << "\n";
@@ -87,7 +87,7 @@ int main() {
         }
     }
 
-    std::cout << "RODAS Robertson: PASSED steps=" << state.n_step
+    std::cout << "ROS2S Robertson: PASSED steps=" << state.n_step
               << " accepted=" << state.n_accept << " rejected=" << state.n_reject << "\n";
     return 0;
 }

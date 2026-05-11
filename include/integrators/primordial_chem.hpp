@@ -33,7 +33,7 @@ inline Real& redshift_storage() {
     return value;
 }
 
-INTEGRATORS_HOST_DEVICE inline Real redshift() {
+INTEGRATORS_HOST_DEVICE Real redshift() {
 #if defined(__CUDA_ARCH__)
     return default_redshift;
 #else
@@ -98,7 +98,7 @@ struct burn_t {
     bool success{true};
 };
 
-INTEGRATORS_HOST_DEVICE inline Real density(const std::array<Real, NumSpec>& xn) {
+INTEGRATORS_HOST_DEVICE Real density(const std::array<Real, NumSpec>& xn) {
     Real rho = 0.0;
     for (std::size_t n = 0; n < xn.size(); ++n) {
         rho += xn[n] * species_mass(static_cast<int>(n));
@@ -112,7 +112,7 @@ struct EosSums {
     Real gasconstant{};
 };
 
-INTEGRATORS_HOST_DEVICE inline EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& xn) {
+INTEGRATORS_HOST_DEVICE EosSums eos_sums_from_number_densities(const std::array<Real, NumSpec>& xn) {
     const Real gasconstant = constants::n_A * constants::k_B;
     const Real protonmass = constants::m_p;
     Real sum_abarinv = 0.0;
@@ -134,22 +134,22 @@ INTEGRATORS_HOST_DEVICE inline EosSums eos_sums_from_number_densities(const std:
     return {sum_abarinv, sum_gammasinv, gasconstant};
 }
 
-INTEGRATORS_HOST_DEVICE inline void eos_rt(burn_t& state) {
+INTEGRATORS_HOST_DEVICE void eos_rt(burn_t& state) {
     const EosSums sums = eos_sums_from_number_densities(state.xn);
     state.e = sums.sum_gammasinv * sums.sum_Abarinv * sums.gasconstant * state.T;
 }
 
-INTEGRATORS_HOST_DEVICE inline void eos_re(burn_t& state) {
+INTEGRATORS_HOST_DEVICE void eos_re(burn_t& state) {
     const EosSums sums = eos_sums_from_number_densities(state.xn);
     state.T = state.e / (sums.sum_gammasinv * sums.gasconstant * sums.sum_Abarinv);
 }
 
-INTEGRATORS_HOST_DEVICE inline void balance_charge(burn_t& state) {
+INTEGRATORS_HOST_DEVICE void balance_charge(burn_t& state) {
     state.xn[0] = -state.xn[3] - state.xn[7] + state.xn[1] + state.xn[12] +
                   state.xn[6] + state.xn[4] + state.xn[9] + 2.0 * state.xn[11];
 }
 
-INTEGRATORS_HOST_DEVICE inline void normalize_number_densities_to_density(burn_t& state) {
+INTEGRATORS_HOST_DEVICE void normalize_number_densities_to_density(burn_t& state) {
     std::array<Real, NumSpec> mass_fractions{};
     Real sum = 0.0;
     for (std::size_t n = 0; n < mass_fractions.size(); ++n) {
@@ -162,7 +162,7 @@ INTEGRATORS_HOST_DEVICE inline void normalize_number_densities_to_density(burn_t
     }
 }
 
-INTEGRATORS_HOST_DEVICE inline void floor_and_normalize_number_densities(burn_t& state) {
+INTEGRATORS_HOST_DEVICE void floor_and_normalize_number_densities(burn_t& state) {
     for (Real& xn : state.xn) {
         xn = std::max(xn, small_number_density_floor());
     }
@@ -171,7 +171,7 @@ INTEGRATORS_HOST_DEVICE inline void floor_and_normalize_number_densities(burn_t&
 
 namespace Rates {}
 
-INTEGRATORS_HOST_DEVICE inline
+INTEGRATORS_HOST_DEVICE
 void rhs_specie(const burn_t& state,
              Array1D<Real, 1, neqs>& ydot,
              const Array1D<Real, 0, NumSpec-1>& X,
@@ -511,7 +511,7 @@ void rhs_specie(const burn_t& state,
 
 }
 
-INTEGRATORS_HOST_DEVICE inline Real rhs_eint(const burn_t& state,
+INTEGRATORS_HOST_DEVICE Real rhs_eint(const burn_t& state,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const z) {
 
@@ -1349,7 +1349,7 @@ INTEGRATORS_HOST_DEVICE inline Real rhs_eint(const burn_t& state,
 }
 
 
-INTEGRATORS_HOST_DEVICE inline void actual_rhs (burn_t& state, Array1D<Real, 1, neqs>& ydot)
+INTEGRATORS_HOST_DEVICE void actual_rhs (burn_t& state, Array1D<Real, 1, neqs>& ydot)
 {
     Real z = redshift();
 
@@ -1373,7 +1373,7 @@ INTEGRATORS_HOST_DEVICE inline void actual_rhs (burn_t& state, Array1D<Real, 1, 
 
 
 template<class MatrixType>
-INTEGRATORS_HOST_DEVICE inline void jac_nuc(const burn_t& state,
+INTEGRATORS_HOST_DEVICE void jac_nuc(const burn_t& state,
              MatrixType& jac,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const z)
@@ -6833,7 +6833,7 @@ INTEGRATORS_HOST_DEVICE inline void jac_nuc(const burn_t& state,
 
 
 template<class MatrixType>
-INTEGRATORS_HOST_DEVICE inline void actual_jac(const burn_t& state, MatrixType& jac)
+INTEGRATORS_HOST_DEVICE void actual_jac(const burn_t& state, MatrixType& jac)
 {
     Real z = redshift();
 
@@ -6856,8 +6856,30 @@ struct JacobianAdapter {
     }
 };
 
+struct ShiftedNegatedJacobianAdapter {
+    struct Entry {
+        Real& value;
+        Real diagonal;
+
+        INTEGRATORS_HOST_DEVICE Entry& operator=(Real jacobian_value) {
+            value = diagonal - jacobian_value;
+            return *this;
+        }
+    };
+
+    std::array<std::array<Real, neqs>, neqs>& matrix;
+    Real diagonal_shift;
+
+    INTEGRATORS_HOST_DEVICE Entry operator()(int row, int col) {
+        const auto i = static_cast<std::size_t>(row - 1);
+        const auto j = static_cast<std::size_t>(col - 1);
+        return Entry{matrix[i][j], (row == col) ? diagonal_shift : 0.0};
+    }
+};
+
 struct PrimordialChem {
     static constexpr integrators::size_type neqs = primordial_chem::neqs;
+    static constexpr bool rhs_allows_input_output_alias = true;
 
     using state_type = std::array<Real, neqs>;
     using rhs_type = std::array<Real, neqs>;
@@ -6893,6 +6915,22 @@ struct PrimordialChem {
 
         burn_t state = burn_state_from_y(y);
         JacobianAdapter adapter{jac};
+        actual_jac(state, adapter);
+    }
+
+    INTEGRATORS_HOST_DEVICE static void jacobian_shifted_negated([[maybe_unused]] Real t,
+                                                                  const state_type& y,
+                                                                  Real diagonal_shift,
+                                                                  jacobian_type& matrix) {
+        for (auto& row : matrix) {
+            row.fill(0.0);
+        }
+        for (integrators::size_type i = 0; i < neqs; ++i) {
+            matrix[i][i] = diagonal_shift;
+        }
+
+        burn_t state = burn_state_from_y(y);
+        ShiftedNegatedJacobianAdapter adapter{matrix, diagonal_shift};
         actual_jac(state, adapter);
     }
 };
