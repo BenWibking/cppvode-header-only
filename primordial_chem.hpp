@@ -80,7 +80,6 @@ struct burn_t {
     Real T{};
     Real e{};
     std::array<Real, NumSpec> xn{};
-    bool success{true};
 };
 
 INTEGRATORS_HOST_DEVICE Real density(const std::array<Real, NumSpec>& xn) {

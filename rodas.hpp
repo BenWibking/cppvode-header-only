@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 
@@ -32,13 +31,6 @@ struct RODASState {
     int n_reject{0};
     int n_decomp{0};
     int n_solve{0};
-    Real last_error{0.0};
-    Real min_error{std::numeric_limits<Real>::max()};
-    Real max_error{0.0};
-    Real min_abs_h{std::numeric_limits<Real>::max()};
-    Real max_abs_h{0.0};
-    int step_limited_by_fac_min{0};
-    int step_limited_by_fac_max{0};
 
     int max_steps{100000};
     bool predictive_controller{true};
@@ -94,7 +86,6 @@ class RODAS {
 public:
     static constexpr size_type N = ProblemTraits<Problem>::neqs;
     using State = RODASState<N>;
-    using ProblemState = typename ProblemTraits<Problem>::state_type;
 
 private:
     static INTEGRATORS_HOST_DEVICE Real rtol_for(const State& s, size_type i) {
@@ -149,21 +140,6 @@ private:
         s.n_solve += 1;
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_error_stats(State& s, Real err, Real h,
-                                                           Real raw_fac, Real lower_fac,
-                                                           Real upper_fac) {
-        s.last_error = err;
-        s.min_error = std::min(s.min_error, err);
-        s.max_error = std::max(s.max_error, err);
-        s.min_abs_h = std::min(s.min_abs_h, std::abs(h));
-        s.max_abs_h = std::max(s.max_abs_h, std::abs(h));
-        if (raw_fac < lower_fac) {
-            s.step_limited_by_fac_max += 1;
-        } else if (raw_fac > upper_fac) {
-            s.step_limited_by_fac_min += 1;
-        }
-    }
-
     static INTEGRATORS_HOST_DEVICE void record_rhs(State& s, int count = 1) {
         s.n_rhs += count;
     }
@@ -191,7 +167,7 @@ private:
     }
 
 public:
-    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& problem_state, State& s) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(State& s) {
         using C = detail::ROS2SCoefficients;
 
         if (s.tout == s.t) {
@@ -242,7 +218,6 @@ public:
             if (last) {
                 s.t = x;
                 s.dt = hopt;
-                problem_state = s.y;
                 return IntegratorResult::SUCCESS;
             }
 
@@ -311,7 +286,6 @@ public:
                 const Real raw_fac = std::cbrt(err) / s.safe;
                 const Real lower_fac = 1.0 / s.fac_max;
                 const Real upper_fac = 1.0 / s.fac_min;
-                record_error_stats(s, err, h, raw_fac, lower_fac, upper_fac);
                 const Real fac_step = std::max(lower_fac, std::min(upper_fac, raw_fac));
                 Real hnew = h / fac_step;
                 if (err <= 1.0) {
@@ -352,9 +326,6 @@ public:
         }
     }
 };
-
-template<typename Problem>
-using ROS2S = RODAS<Problem>;
 
 } // namespace integrators
 

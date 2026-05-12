@@ -38,13 +38,11 @@ namespace detail {
 
 template<typename Problem, size_type N, typename = void>
 struct problem_jacobian {
-    using type = std::array<std::array<Real, N>, N>;
     static constexpr bool available = false;
 };
 
 template<typename Problem, size_type N>
 struct problem_jacobian<Problem, N, std::void_t<typename Problem::jacobian_type>> {
-    using type = typename Problem::jacobian_type;
     static constexpr bool available = true;
 };
 
@@ -55,8 +53,6 @@ template<typename Problem>
 struct ProblemTraits {
     static constexpr size_type neqs = Problem::neqs;
     using state_type = typename Problem::state_type;
-    using rhs_type = typename Problem::rhs_type;
-    using jacobian_type = typename detail::problem_jacobian<Problem, neqs>::type;
     static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
 };
 

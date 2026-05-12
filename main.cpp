@@ -58,7 +58,6 @@ struct ValueSummary {
 };
 
 struct CollapseState {
-    pc::burn_t initial{};
     pc::burn_t current{};
     integrators::Real time{};
     integrators::Real density_driver{};
@@ -86,7 +85,7 @@ pc::burn_t make_initial_state() {
 
 CollapseState make_collapse_state() {
     pc::burn_t state = make_initial_state();
-    return {state, state, 0.0, state.rho, 0, {}};
+    return {state, 0.0, state.rho, 0, {}};
 }
 
 std::uint64_t splitmix64(std::uint64_t value) {
@@ -154,8 +153,7 @@ integrators::IntegratorResult burn_ros2s(pc::burn_t& state, integrators::Real dt
     }
     ros2s_state.y[pc::NumSpec] = state.e;
 
-    pc::PrimordialChem::state_type problem_state{};
-    const auto result = integrator.integrate(problem_state, ros2s_state);
+    const auto result = integrator.integrate(ros2s_state);
 
     stats.internal_steps += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_step));
     stats.rhs_calls += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_rhs));
@@ -166,7 +164,6 @@ integrators::IntegratorResult burn_ros2s(pc::burn_t& state, integrators::Real dt
     stats.rejected_steps += static_cast<std::uint64_t>(std::max(0, ros2s_state.n_reject));
 
     if (result != integrators::IntegratorResult::SUCCESS) {
-        state.success = false;
         return result;
     }
 
@@ -174,7 +171,6 @@ integrators::IntegratorResult burn_ros2s(pc::burn_t& state, integrators::Real dt
         state.xn[static_cast<std::size_t>(n)] = ros2s_state.y[static_cast<std::size_t>(n)];
     }
     state.e = ros2s_state.y[pc::NumSpec];
-    state.success = true;
     return result;
 }
 
