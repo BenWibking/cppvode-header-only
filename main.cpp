@@ -72,6 +72,8 @@ struct Options {
     bool show_help{false};
 };
 
+using Ros2sIntegrator = integrators::RODAS<pc::PrimordialChem>;
+
 pc::burn_t make_initial_state() {
     pc::burn_t state;
     state.T = initial_temperature;
@@ -121,8 +123,7 @@ void apply_perturbation(CollapseState& collapse, int cell, int step, bool enable
     pc::eos_re(collapse.current);
 }
 
-template<typename State>
-void configure_ros2s(State& state) {
+void configure_ros2s(Ros2sIntegrator::State& state) {
     state.use_vector_tolerances = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
         state.rtol_vec[static_cast<std::size_t>(n)] = rtol_spec;
@@ -137,12 +138,10 @@ void configure_ros2s(State& state) {
 
 integrators::IntegratorResult burn_ros2s(pc::burn_t& state, integrators::Real dt,
                                          IntegratorStats& stats) {
-    using Integrator = integrators::RODAS<pc::PrimordialChem, true>;
-
     pc::eos_rt(state);
 
-    Integrator integrator;
-    Integrator::State ros2s_state;
+    Ros2sIntegrator integrator;
+    Ros2sIntegrator::State ros2s_state;
     configure_ros2s(ros2s_state);
 
     ros2s_state.t = 0.0;

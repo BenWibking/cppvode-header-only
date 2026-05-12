@@ -6879,7 +6879,6 @@ struct ShiftedNegatedJacobianAdapter {
 
 struct PrimordialChem {
     static constexpr integrators::size_type neqs = primordial_chem::neqs;
-    static constexpr bool rhs_allows_input_output_alias = true;
 
     using state_type = std::array<Real, neqs>;
     using rhs_type = std::array<Real, neqs>;
