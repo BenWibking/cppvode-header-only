@@ -16,11 +16,9 @@ namespace integrators::primordial_chem {
 constexpr int NumSpec = 14;
 constexpr int neqs = NumSpec + 1;
 constexpr int net_ienuc = NumSpec + 1;
-constexpr Real small_x = 1.0e-100;
 constexpr Real default_redshift = 30.0;
 constexpr Real grav_constant = 6.674e-8;
 constexpr Real pi = 3.141592653589793238462643383279502884;
-constexpr Real ln10 = 2.30258509299404568401799145468436421;
 
 namespace constants {
 constexpr Real n_A = 6.02214076e+23;
@@ -44,19 +42,6 @@ inline void set_redshift(Real value) { redshift_storage() = value; }
 
 inline constexpr std::array<std::string_view, NumSpec> short_spec_names{
     "E", "Hp", "H", "Hm", "Dp", "D", "H2p", "Dm", "H2", "HDp", "HD", "HEpp", "HEp", "HE"};
-
-inline constexpr std::array<std::string_view, NumSpec> spec_names{
-    "elec", "hp", "h", "hm", "dp", "d", "h2p", "dm", "h2", "hdp", "hd", "hepp", "hep", "he"};
-
-inline constexpr std::array<Real, NumSpec> spmasses{
-    9.10938188e-28, 1.67262158e-24, 1.67353251819e-24, 1.67444345638e-24,
-    3.34512158e-24, 3.34603251819e-24, 3.34615409819e-24, 3.34694345638e-24,
-    3.34706503638e-24, 5.01865409819e-24, 5.01956503638e-24, 6.69024316e-24,
-    6.69115409819e-24, 6.69206503638e-24};
-
-inline constexpr std::array<Real, NumSpec> gammas{
-    5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0,
-    1.4, 5.0 / 3.0, 1.4, 1.4, 1.4, 5.0 / 3.0, 5.0 / 3.0, 5.0 / 3.0};
 
 INTEGRATORS_HOST_DEVICE constexpr Real small_number_density_floor() { return 1.0e-100; }
 
@@ -169,15 +154,11 @@ INTEGRATORS_HOST_DEVICE void floor_and_normalize_number_densities(burn_t& state)
     normalize_number_densities_to_density(state);
 }
 
-namespace Rates {}
-
 INTEGRATORS_HOST_DEVICE
 void rhs_specie(const burn_t& state,
              Array1D<Real, 1, neqs>& ydot,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const /*z*/) {
-
-    using namespace Rates;
 
     Real T = state.T;
 
@@ -514,8 +495,6 @@ void rhs_specie(const burn_t& state,
 INTEGRATORS_HOST_DEVICE Real rhs_eint(const burn_t& state,
              const Array1D<Real, 0, NumSpec-1>& X,
              Real const z) {
-
-    using namespace Rates;
 
     Real T = state.T;
         Real x0 = 9.1093818800000008e-28*X(0) + 1.6726215800000001e-24*X(1) + 5.01956503638e-24*X(10) + 6.6902431600000005e-24*X(11) + 6.6911540981899994e-24*X(12) + 6.6920650363799998e-24*X(13) + 1.6735325181900001e-24*X(2) + 1.6744434563800001e-24*X(3) + 3.3451215800000003e-24*X(4) + 3.3460325181899999e-24*X(5) + 3.3461540981899999e-24*X(6) + 3.3469434563800003e-24*X(7) + 3.3470650363800003e-24*X(8) + 5.0186540981899997e-24*X(9);

@@ -164,38 +164,6 @@ INTEGRATORS_HOST_DEVICE void lu_solve(const std::array<std::array<Real, N>, N>& 
 #endif
 }
 
-// Matrix-vector multiplication
-template<size_type N>
-INTEGRATORS_HOST_DEVICE void matvec(const std::array<std::array<Real, N>, N>& A,
-                                    const std::array<Real, N>& x,
-                                    std::array<Real, N>& y) {
-    for (size_type i = 0; i < N; ++i) {
-        y[i] = 0.0;
-        for (size_type j = 0; j < N; ++j) {
-            y[i] += A[i][j] * x[j];
-        }
-    }
-}
-
-// Vector norms
-template<size_type N>
-INTEGRATORS_HOST_DEVICE Real norm2(const std::array<Real, N>& x) {
-    Real sum = 0.0;
-    for (size_type i = 0; i < N; ++i) {
-        sum += x[i] * x[i];
-    }
-    return std::sqrt(sum / N);
-}
-
-template<size_type N>
-INTEGRATORS_HOST_DEVICE Real norm_inf(const std::array<Real, N>& x) {
-    Real max_val = 0.0;
-    for (size_type i = 0; i < N; ++i) {
-        max_val = std::max(max_val, std::abs(x[i]));
-    }
-    return max_val;
-}
-
 } // namespace linalg
 } // namespace integrators
 
