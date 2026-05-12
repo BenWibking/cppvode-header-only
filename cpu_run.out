@@ -1,0 +1,17 @@
+Primordial chemistry collapse grid with ROS2S
+grid: 64^3 (262144 cells)
+threads: 40
+perturbations: enabled
+completed global collapse steps: 462
+cell completed steps: [411, 435, 462]
+cell physical time: [2.89470283954072750e+15, 3.05270286914083700e+15, 3.27649194694799150e+15]
+cell density driver: [2.0000002083685871e-06, 2.0992723995688905e-06, 2.6295799526943975e-06]
+wall time: 1118.7990467269999 s
+ROS2S internal steps: [7609, 8176, 9250]
+ROS2S rhs calls: [22827, 24528, 27750]
+ROS2S jacobian calls: [5643, 5966, 6681]
+ROS2S decompositions: [7609, 8176, 9250]
+ROS2S linear solves: [22827, 24528, 27750]
+ROS2S accepted/rejected: [5643/6, 5966/130, 6681/425]
+
+final states: final_states_grid64_cpu.bin (262144 packed records, 172 bytes each)
