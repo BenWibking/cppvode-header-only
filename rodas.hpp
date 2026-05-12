@@ -18,9 +18,6 @@ struct RODASState {
     Real dt{0.0};
     std::array<Real, N> y{};
 
-    Real rtol{1.e-6};
-    Real atol{1.e-12};
-    bool use_vector_tolerances{false};
     std::array<Real, N> rtol_vec{};
     std::array<Real, N> atol_vec{};
 
@@ -33,11 +30,7 @@ struct RODASState {
     int n_solve{0};
 
     int max_steps{100000};
-    bool predictive_controller{true};
-    bool autonomous{true};
-    bool jacobian_analytic{false};
     Real uround{1.e-16};
-    Real hmax{0.0};
     Real fac_min{0.2};
     Real fac_max{6.0};
     Real safe{0.9};
@@ -50,14 +43,6 @@ struct RODASState {
     std::array<std::array<Real, N>, N> e{};
     std::array<Real, N> dy{};
     std::array<int, N> ip{};
-
-    INTEGRATORS_HOST_DEVICE std::array<Real, N>& rhs_scratch(std::array<Real, N>&) {
-        return dy;
-    }
-
-    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N>& matrix() {
-        return e;
-    }
 };
 
 namespace detail {
@@ -85,15 +70,17 @@ template<typename Problem>
 class RODAS {
 public:
     static constexpr size_type N = ProblemTraits<Problem>::neqs;
+    static_assert(ProblemTraits<Problem>::has_analytic_jacobian,
+                  "RODAS requires Problem::jacobian_type and Problem::jacobian");
     using State = RODASState<N>;
 
 private:
     static INTEGRATORS_HOST_DEVICE Real rtol_for(const State& s, size_type i) {
-        return s.use_vector_tolerances ? s.rtol_vec[i] : s.rtol;
+        return s.rtol_vec[i];
     }
 
     static INTEGRATORS_HOST_DEVICE Real atol_for(const State& s, size_type i) {
-        return s.use_vector_tolerances ? s.atol_vec[i] : s.atol;
+        return s.atol_vec[i];
     }
 
     static INTEGRATORS_HOST_DEVICE void rhs(Real t, const std::array<Real, N>& y,
@@ -102,33 +89,18 @@ private:
     }
 
     static INTEGRATORS_HOST_DEVICE void eval_jacobian(State& s, Real x) {
-        if (s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian) {
-            if constexpr (ProblemTraits<Problem>::has_analytic_jacobian) {
-                Problem::jacobian(x, s.y, s.fjac);
-            }
-        } else {
-            for (size_type i = 0; i < N; ++i) {
-                const Real ysafe = s.y[i];
-                const Real delt = std::sqrt(s.uround * std::max(1.e-5, std::abs(ysafe)));
-                s.y[i] = ysafe + delt;
-                rhs(x, s.y, s.work);
-                for (size_type j = 0; j < N; ++j) {
-                    s.fjac[j][i] = (s.work[j] - s.ak1[j]) / delt;
-                }
-                s.y[i] = ysafe;
-            }
-        }
+        Problem::jacobian(x, s.y, s.fjac);
         s.n_jac += 1;
     }
 
     static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac) {
         for (size_type i = 0; i < N; ++i) {
             for (size_type j = 0; j < N; ++j) {
-                s.matrix()[i][j] = -s.fjac[i][j];
+                s.e[i][j] = -s.fjac[i][j];
             }
-            s.matrix()[i][i] += fac;
+            s.e[i][i] += fac;
         }
-        const int info = linalg::lu_decomposition<N>(s.matrix(), s.ip);
+        const int info = linalg::lu_decomposition<N>(s.e, s.ip);
         if (info == 0) {
             s.n_decomp += 1;
         }
@@ -136,7 +108,7 @@ private:
     }
 
     static INTEGRATORS_HOST_DEVICE void solve(State& s, std::array<Real, N>& ak) {
-        linalg::lu_solve<N>(s.matrix(), s.ip, ak);
+        linalg::lu_solve<N>(s.e, s.ip, ak);
         s.n_solve += 1;
     }
 
@@ -170,10 +142,7 @@ public:
     INTEGRATORS_HOST_DEVICE IntegratorResult integrate(State& s) {
         using C = detail::ROS2SCoefficients;
 
-        if (s.tout == s.t) {
-            return IntegratorResult::SUCCESS;
-        }
-        if (!s.autonomous || s.safe <= 0.001 || s.safe >= 1.0 ||
+        if (s.tout <= s.t || s.safe <= 0.001 || s.safe >= 1.0 ||
             s.fac_min <= 0.0 || s.fac_max < 1.0) {
             return IntegratorResult::BAD_INPUTS;
         }
@@ -183,14 +152,12 @@ public:
             }
         }
 
-        const Real posneg = (s.tout >= s.t) ? 1.0 : -1.0;
-        const Real hmaxn = std::min(s.hmax == 0.0 ? std::abs(s.tout - s.t) : std::abs(s.hmax),
-                                    std::abs(s.tout - s.t));
+        const Real hmaxn = s.tout - s.t;
         Real h = s.dt;
         if (std::abs(h) <= 10.0 * s.uround) {
             h = 1.e-6;
         }
-        h = std::min(std::abs(h), hmaxn) * posneg;
+        h = std::min(std::abs(h), hmaxn);
 
         bool reject = false;
         bool last = false;
@@ -201,8 +168,6 @@ public:
         Real x = s.t;
         int n_step = 0;
         int n_accept = 0;
-        n_step = s.n_step;
-        n_accept = s.n_accept;
 
         for (;;) {
             if (n_step > s.max_steps) {
@@ -222,15 +187,11 @@ public:
             }
 
             hopt = h;
-            if ((x + h * 1.0001 - s.tout) * posneg >= 0.0) {
+            if (x + h * 1.0001 >= s.tout) {
                 h = s.tout - x;
                 last = true;
             }
 
-            if (!(s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian)) {
-                rhs(x, s.y, s.ak1);
-                record_rhs(s);
-            }
             eval_jacobian(s, x);
 
             for (;;) {
@@ -255,10 +216,9 @@ public:
                     s.ynew[i] = s.y[i] + C::a21 * s.ak1[i];
                     s.ak2[i] = (C::c21 / h) * s.ak1[i];
                 }
-                auto& rhs_tmp = s.rhs_scratch(s.ynew);
-                rhs(x + C::ct2 * h, s.ynew, rhs_tmp);
+                rhs(x + C::ct2 * h, s.ynew, s.dy);
                 for (size_type i = 0; i < N; ++i) {
-                    s.ak2[i] += rhs_tmp[i];
+                    s.ak2[i] += s.dy[i];
                 }
                 solve(s, s.ak2);
 
@@ -266,10 +226,9 @@ public:
                     s.ynew[i] = s.y[i] + C::a31 * s.ak1[i] + C::a32 * s.ak2[i];
                     s.work[i] = (C::c31 * s.ak1[i] + C::c32 * s.ak2[i]) / h;
                 }
-                auto& rhs_tmp_stage3 = s.rhs_scratch(s.ynew);
-                rhs(x + h, s.ynew, rhs_tmp_stage3);
+                rhs(x + h, s.ynew, s.dy);
                 for (size_type i = 0; i < N; ++i) {
-                    s.work[i] += rhs_tmp_stage3[i];
+                    s.work[i] += s.dy[i];
                 }
                 solve(s, s.work);
 
@@ -291,25 +250,23 @@ public:
                 if (err <= 1.0) {
                     n_accept += 1;
                     record_accept(s, n_accept);
-                    if (s.predictive_controller) {
-                        if (n_accept > 1) {
-                            const Real facgus = std::max(1.0 / s.fac_max,
-                                std::min(1.0 / s.fac_min,
-                                         (hacc / h) *
-                                         std::cbrt((err * err) / erracc) /
-                                         s.safe));
-                            hnew = h / std::max(fac_step, facgus);
-                        }
-                        hacc = h;
-                        erracc = std::max(1.e-2, err);
+                    if (n_accept > 1) {
+                        const Real facgus = std::max(1.0 / s.fac_max,
+                            std::min(1.0 / s.fac_min,
+                                     (hacc / h) *
+                                     std::cbrt((err * err) / erracc) /
+                                     s.safe));
+                        hnew = h / std::max(fac_step, facgus);
                     }
+                    hacc = h;
+                    erracc = std::max(1.e-2, err);
                     s.y = s.ynew;
                     x += h;
                     if (std::abs(hnew) > hmaxn) {
-                        hnew = posneg * hmaxn;
+                        hnew = hmaxn;
                     }
                     if (reject) {
-                        hnew = posneg * std::min(std::abs(hnew), std::abs(h));
+                        hnew = std::min(std::abs(hnew), std::abs(h));
                     }
                     reject = false;
                     h = hnew;

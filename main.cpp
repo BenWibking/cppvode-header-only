@@ -123,15 +123,12 @@ void apply_perturbation(CollapseState& collapse, int cell, int step, bool enable
 }
 
 void configure_ros2s(Ros2sIntegrator::State& state) {
-    state.use_vector_tolerances = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
         state.rtol_vec[static_cast<std::size_t>(n)] = rtol_spec;
         state.atol_vec[static_cast<std::size_t>(n)] = atol_spec;
     }
     state.rtol_vec[pc::NumSpec] = rtol_energy;
     state.atol_vec[pc::NumSpec] = atol_energy;
-    state.rtol = rtol_spec;
-    state.atol = atol_spec;
     state.max_steps = 10000000;
 }
 
@@ -146,8 +143,6 @@ integrators::IntegratorResult burn_ros2s(pc::burn_t& state, integrators::Real dt
     ros2s_state.t = 0.0;
     ros2s_state.tout = dt;
     ros2s_state.dt = dt;
-    ros2s_state.jacobian_analytic = true;
-    ros2s_state.autonomous = true;
     for (int n = 0; n < pc::NumSpec; ++n) {
         ros2s_state.y[static_cast<std::size_t>(n)] = state.xn[static_cast<std::size_t>(n)];
     }
