@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -72,6 +74,35 @@ struct Options {
 };
 
 using Ros2sIntegrator = integrators::RODAS<pc::PrimordialChem>;
+
+constexpr const char* backend_name() {
+#if defined(__CUDACC__)
+    return "cuda";
+#elif defined(__HIPCC__)
+    return "hip";
+#else
+    return "cpu";
+#endif
+}
+
+#pragma pack(push, 1)
+struct PackedFinalState {
+    std::int32_t cell{};
+    std::int32_t i{};
+    std::int32_t j{};
+    std::int32_t k{};
+    std::int32_t completed_steps{};
+    integrators::Real time{};
+    integrators::Real density_driver{};
+    integrators::Real rho{};
+    integrators::Real T{};
+    integrators::Real e{};
+    integrators::Real xn[pc::NumSpec]{};
+};
+#pragma pack(pop)
+
+static_assert(sizeof(PackedFinalState) ==
+              5 * sizeof(std::int32_t) + (5 + pc::NumSpec) * sizeof(integrators::Real));
 
 pc::burn_t make_initial_state() {
     pc::burn_t state;
@@ -390,6 +421,49 @@ void print_state(const pc::burn_t& state) {
     }
 }
 
+PackedFinalState make_packed_final_state(const CollapseState& state, int cell, int grid_dim) {
+    PackedFinalState packed{};
+    packed.cell = static_cast<std::int32_t>(cell);
+    packed.i = static_cast<std::int32_t>(cell % grid_dim);
+    packed.j = static_cast<std::int32_t>((cell / grid_dim) % grid_dim);
+    packed.k = static_cast<std::int32_t>(cell / (grid_dim * grid_dim));
+    packed.completed_steps = static_cast<std::int32_t>(state.completed_steps);
+    packed.time = state.time;
+    packed.density_driver = state.density_driver;
+    packed.rho = state.current.rho;
+    packed.T = state.current.T;
+    packed.e = state.current.e;
+    for (int n = 0; n < pc::NumSpec; ++n) {
+        packed.xn[static_cast<std::size_t>(n)] = state.current.xn[static_cast<std::size_t>(n)];
+    }
+    return packed;
+}
+
+bool write_final_states(const std::vector<CollapseState>& cells, int grid_dim,
+                        const std::string& path) {
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        std::cerr << "failed to open final-state output file: " << path << "\n";
+        return false;
+    }
+
+    for (std::size_t cell = 0; cell < cells.size(); ++cell) {
+        const auto packed = make_packed_final_state(cells[cell], static_cast<int>(cell), grid_dim);
+        output.write(reinterpret_cast<const char*>(&packed), sizeof(packed));
+        if (!output) {
+            std::cerr << "failed to write final-state output file: " << path << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string final_state_filename(int grid_dim) {
+    std::ostringstream name;
+    name << "final_states_grid" << grid_dim << "_" << backend_name() << ".bin";
+    return name.str();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -459,6 +533,16 @@ int main(int argc, char** argv) {
     print_collapse_summary(cells, representative);
     std::cout << "wall time: " << elapsed << " s\n";
     print_stats(cells, total_stats);
-    print_state(representative.current);
+    if (options.grid_dim > 1) {
+        const std::string final_state_file = final_state_filename(options.grid_dim);
+        if (!write_final_states(cells, options.grid_dim, final_state_file)) {
+            return 1;
+        }
+        std::cout << "final states: " << final_state_file << " ("
+                  << cells.size() << " packed records, "
+                  << sizeof(PackedFinalState) << " bytes each)\n";
+    } else {
+        print_state(representative.current);
+    }
     return 0;
 }
