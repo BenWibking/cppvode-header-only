@@ -8,14 +8,18 @@ Build and run:
 ```sh
 make
 build/primordial_ros2s --grid 4 --perturb
+build/primordial_ros2s_ref --grid 4 --perturb -N 8
 build/primordial_ros2s --grid 4 --compare-final-state final_states_grid4_cpu.bin
 ```
 
-The executable is `build/primordial_ros2s`.
+The serial executable is `build/primordial_ros2s`. The threaded CPU reference
+executable is `build/primordial_ros2s_ref`.
 
 Options:
 
 - `--grid N`: run `N^3` independent cells.
+- `-N THREADS`: for `primordial_ros2s_ref`, run independent cells across this
+  many CPU threads.
 - `--perturb`: every 20 collapse steps, scale each cell's density and species by
   a deterministic random factor in `[0.9, 1.1]`.
 - `--compare-final-state FILE`: after the run, read `FILE` as packed final-state

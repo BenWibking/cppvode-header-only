@@ -716,6 +716,7 @@ std::string final_state_filename(int grid_dim) {
 
 } // namespace
 
+#ifndef PRIMORDIAL_ROS2S_NO_MAIN
 int main(int argc, char** argv) {
     std::cout << std::setprecision(std::numeric_limits<integrators::Real>::max_digits10);
 
@@ -807,3 +808,4 @@ int main(int argc, char** argv) {
     }
     return 0;
 }
+#endif
