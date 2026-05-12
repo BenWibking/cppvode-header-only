@@ -138,6 +138,19 @@ struct ComparisonSummary {
     std::string failure_message{};
 };
 
+struct ComparisonFailure {
+    std::int32_t cell{};
+    std::int32_t i{};
+    std::int32_t j{};
+    std::int32_t k{};
+    std::string field{};
+    std::string actual{};
+    std::string reference{};
+    std::string relative_error{};
+    std::string rtol{};
+    std::string atol{};
+};
+
 constexpr bool is_deuterium_bearing_species(int n) {
     return n == 4 || n == 5 || n == 7 || n == 9 || n == 10;
 }
@@ -477,6 +490,97 @@ long double relative_error(integrators::Real value, integrators::Real reference,
     return static_cast<long double>(std::abs(value - reference) / denom);
 }
 
+std::string format_integral(std::int32_t value) {
+    return std::to_string(value);
+}
+
+std::string format_comparison_value(integrators::Real value) {
+    return format_scientific(static_cast<long double>(value));
+}
+
+void append_comparison_failure(std::vector<ComparisonFailure>& failures,
+                               const PackedFinalState& actual,
+                               const std::string& field,
+                               const std::string& actual_value,
+                               const std::string& reference_value,
+                               const std::string& relative_error,
+                               const std::string& rtol,
+                               const std::string& atol) {
+    failures.push_back({actual.cell, actual.i, actual.j, actual.k, field,
+                        actual_value, reference_value, relative_error, rtol, atol});
+}
+
+void append_metadata_failure(std::vector<ComparisonFailure>& failures,
+                             const PackedFinalState& actual,
+                             const std::string& field,
+                             std::int32_t actual_value,
+                             std::int32_t reference_value) {
+    append_comparison_failure(failures, actual, field, format_integral(actual_value),
+                              format_integral(reference_value), "", "", "");
+}
+
+std::string csv_escape(const std::string& value) {
+    if (value.find_first_of(",\"\n\r") == std::string::npos) {
+        return value;
+    }
+
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        if (ch == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+bool write_comparison_failures_csv(const std::vector<ComparisonFailure>& failures,
+                                   const std::string& path) {
+    if (failures.empty()) {
+        return true;
+    }
+
+    std::vector<ComparisonFailure> sorted_failures = failures;
+    std::stable_sort(sorted_failures.begin(), sorted_failures.end(),
+                     [](const ComparisonFailure& lhs, const ComparisonFailure& rhs) {
+                         return lhs.cell < rhs.cell;
+                     });
+
+    std::ofstream output(path);
+    if (!output) {
+        std::cerr << "failed to open comparison-failures CSV file: " << path << "\n";
+        return false;
+    }
+
+    output << "cell,i,j,k,field,actual,reference,relative_error,rtol,atol\n";
+    for (const auto& failure : sorted_failures) {
+        output << failure.cell << ','
+               << failure.i << ','
+               << failure.j << ','
+               << failure.k << ','
+               << csv_escape(failure.field) << ','
+               << csv_escape(failure.actual) << ','
+               << csv_escape(failure.reference) << ','
+               << csv_escape(failure.relative_error) << ','
+               << csv_escape(failure.rtol) << ','
+               << csv_escape(failure.atol) << '\n';
+        if (!output) {
+            std::cerr << "failed to write comparison-failures CSV file: " << path << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string comparison_failures_csv_filename() {
+    std::ostringstream name;
+    name << "final_state_comparison_failures_" << backend_name() << ".csv";
+    return name.str();
+}
+
 void print_scientific_summary(const char* label, const ValueSummary& summary) {
     std::cout << label << ": [" << format_scientific(summary.min) << ", "
               << format_scientific(summary.median) << ", "
@@ -742,7 +846,8 @@ bool read_final_states(const std::string& path, std::size_t expected_records,
 
 ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
                                        int grid_dim,
-                                       const std::vector<PackedFinalState>& reference) {
+                                       const std::vector<PackedFinalState>& reference,
+                                       std::vector<ComparisonFailure>& failures) {
     ComparisonSummary summary{};
 
     for (std::size_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
@@ -768,6 +873,22 @@ ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
             summary.failure_message = message.str();
         }
         summary.pass = summary.pass && metadata_match;
+        if (actual.cell != expected.cell) {
+            append_metadata_failure(failures, actual, "cell", actual.cell, expected.cell);
+        }
+        if (actual.i != expected.i) {
+            append_metadata_failure(failures, actual, "i", actual.i, expected.i);
+        }
+        if (actual.j != expected.j) {
+            append_metadata_failure(failures, actual, "j", actual.j, expected.j);
+        }
+        if (actual.k != expected.k) {
+            append_metadata_failure(failures, actual, "k", actual.k, expected.k);
+        }
+        if (actual.completed_steps != expected.completed_steps) {
+            append_metadata_failure(failures, actual, "completed_steps",
+                                    actual.completed_steps, expected.completed_steps);
+        }
 
         for (int n = 0; n < pc::NumSpec; ++n) {
             const auto idx = static_cast<std::size_t>(n);
@@ -795,6 +916,15 @@ ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
                 summary.failure_message = message.str();
             }
             summary.pass = summary.pass && species_match;
+            if (!species_match) {
+                append_comparison_failure(failures, actual,
+                                          std::string(pc::short_spec_names[idx]),
+                                          format_comparison_value(value),
+                                          format_comparison_value(expected_value),
+                                          format_scientific(rel),
+                                          format_comparison_value(comparison_species_rtol[idx]),
+                                          format_comparison_value(atol_spec));
+            }
         }
 
         const auto temperature_rel = relative_error(actual.T, expected.T, atol_spec);
@@ -820,6 +950,30 @@ ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
             summary.failure_message = message.str();
         }
         summary.pass = summary.pass && temperature_match && energy_match && rho_match;
+        if (!temperature_match) {
+            append_comparison_failure(failures, actual, "T",
+                                      format_comparison_value(actual.T),
+                                      format_comparison_value(expected.T),
+                                      format_scientific(temperature_rel),
+                                      format_comparison_value(comparison_thermodynamic_rtol),
+                                      format_comparison_value(atol_spec));
+        }
+        if (!energy_match) {
+            append_comparison_failure(failures, actual, "e",
+                                      format_comparison_value(actual.e),
+                                      format_comparison_value(expected.e),
+                                      format_scientific(energy_rel),
+                                      format_comparison_value(comparison_thermodynamic_rtol),
+                                      format_comparison_value(atol_energy));
+        }
+        if (!rho_match) {
+            append_comparison_failure(failures, actual, "rho",
+                                      format_comparison_value(actual.rho),
+                                      format_comparison_value(expected.rho),
+                                      format_scientific(rho_rel),
+                                      format_comparison_value(rtol_spec),
+                                      format_comparison_value(atol_spec));
+        }
     }
 
     return summary;
@@ -832,7 +986,8 @@ bool compare_final_states_from_file(const std::vector<CollapseState>& cells, int
         return false;
     }
 
-    const auto summary = compare_final_states(cells, grid_dim, reference);
+    std::vector<ComparisonFailure> failures;
+    const auto summary = compare_final_states(cells, grid_dim, reference, failures);
     std::cout << "final-state comparison file: " << path << "\n";
     std::cout << "final-state comparison: " << (summary.pass ? "PASS" : "FAIL")
               << " (max deuterium-bearing species rel error "
@@ -845,6 +1000,10 @@ bool compare_final_states_from_file(const std::vector<CollapseState>& cells, int
               << format_scientific(summary.max_rho_rel_error) << ")\n";
     if (!summary.pass && !summary.failure_message.empty()) {
         std::cout << "first comparison failure: " << summary.failure_message << "\n";
+    }
+    if (!summary.pass &&
+        !write_comparison_failures_csv(failures, comparison_failures_csv_filename())) {
+        return false;
     }
     return summary.pass;
 }
