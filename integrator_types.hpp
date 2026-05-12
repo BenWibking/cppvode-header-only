@@ -48,21 +48,6 @@ struct problem_jacobian<Problem, N, std::void_t<typename Problem::jacobian_type>
     static constexpr bool available = true;
 };
 
-template<typename Problem, typename = void>
-struct problem_shifted_negated_jacobian {
-    static constexpr bool available = false;
-};
-
-template<typename Problem>
-struct problem_shifted_negated_jacobian<Problem, std::void_t<decltype(
-    Problem::jacobian_shifted_negated(
-        std::declval<Real>(),
-        std::declval<const typename Problem::state_type&>(),
-        std::declval<Real>(),
-        std::declval<typename Problem::jacobian_type&>()))>> {
-    static constexpr bool available = true;
-};
-
 } // namespace detail
 
 // Base traits for problem definition
@@ -73,8 +58,6 @@ struct ProblemTraits {
     using rhs_type = typename Problem::rhs_type;
     using jacobian_type = typename detail::problem_jacobian<Problem, neqs>::type;
     static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
-    static constexpr bool has_shifted_negated_jacobian =
-        detail::problem_shifted_negated_jacobian<Problem>::available;
 };
 
 // Math utilities

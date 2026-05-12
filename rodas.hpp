@@ -110,10 +110,6 @@ private:
         Problem::rhs(t, y, out);
     }
 
-    static constexpr bool can_assemble_shifted_negated_jacobian() {
-        return ProblemTraits<Problem>::has_shifted_negated_jacobian;
-    }
-
     static INTEGRATORS_HOST_DEVICE void eval_jacobian(State& s, Real x) {
         if (s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian) {
             if constexpr (ProblemTraits<Problem>::has_analytic_jacobian) {
@@ -134,25 +130,12 @@ private:
         s.n_jac += 1;
     }
 
-    static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac, Real x) {
-        if constexpr (can_assemble_shifted_negated_jacobian()) {
-            if (s.jacobian_analytic) {
-                Problem::jacobian_shifted_negated(x, s.y, fac, s.matrix());
-            } else {
-                for (size_type i = 0; i < N; ++i) {
-                    for (size_type j = 0; j < N; ++j) {
-                        s.matrix()[i][j] = -s.fjac[i][j];
-                    }
-                    s.matrix()[i][i] += fac;
-                }
+    static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac) {
+        for (size_type i = 0; i < N; ++i) {
+            for (size_type j = 0; j < N; ++j) {
+                s.matrix()[i][j] = -s.fjac[i][j];
             }
-        } else {
-            for (size_type i = 0; i < N; ++i) {
-                for (size_type j = 0; j < N; ++j) {
-                    s.matrix()[i][j] = -s.fjac[i][j];
-                }
-                s.matrix()[i][i] += fac;
-            }
+            s.matrix()[i][i] += fac;
         }
         const int info = linalg::lu_decomposition<N>(s.matrix(), s.ip);
         if (info == 0) {
@@ -269,23 +252,15 @@ public:
                 last = true;
             }
 
-            const bool direct_shifted_jacobian =
-                s.jacobian_analytic && can_assemble_shifted_negated_jacobian();
-            if (!direct_shifted_jacobian &&
-                !(s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian)) {
+            if (!(s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian)) {
                 rhs(x, s.y, s.ak1);
                 record_rhs(s);
             }
-            if (!direct_shifted_jacobian) {
-                eval_jacobian(s, x);
-            }
+            eval_jacobian(s, x);
 
             for (;;) {
                 const Real fac = 1.0 / (h * C::gamma);
-                if (direct_shifted_jacobian) {
-                    s.n_jac += 1;
-                }
-                if (decompose(s, fac, x) != 0) {
+                if (decompose(s, fac) != 0) {
                     nsing += 1;
                     if (nsing >= 5) {
                         s.t = x;
