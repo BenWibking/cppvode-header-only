@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -29,13 +31,22 @@ constexpr integrators::Real rtol_spec = 1.0e-4;
 constexpr integrators::Real atol_spec = 1.0e-4;
 constexpr integrators::Real rtol_energy = 1.0e-6;
 constexpr integrators::Real atol_energy = 1.0e-6;
+constexpr integrators::Real comparison_thermodynamic_rtol = 1.0e-4;
 constexpr int default_grid_dim = 1;
 constexpr int perturbation_interval = 20;
 constexpr integrators::Real perturbation_amplitude = 0.2;
+constexpr int backup_suffix_digits = 6;
+constexpr int backup_suffix_limit = 1000000;
+constexpr int backup_rename_attempts = 100;
 
 constexpr std::array<integrators::Real, pc::NumSpec> initial_number_densities{
     1.0e-4, 1.0e-4, 1.0e0,  1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40,
     1.0e-40, 1.0e-6, 1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40, 0.0775};
+
+// Match the PASS criteria used by the cusolverdx branch for this network.
+constexpr std::array<integrators::Real, pc::NumSpec> comparison_species_rtol{
+    1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 1.0e-4, 10.0, 1.0e-3,
+    1.0e-4, 1.0e-4, 1.0e-4, 10.0, 1.0e-4, 1.0e-4, 1.0e-4};
 
 struct IntegratorStats {
     std::uint64_t internal_steps{};
@@ -71,6 +82,7 @@ struct Options {
     int grid_dim{default_grid_dim};
     bool perturb{false};
     bool show_help{false};
+    std::string compare_final_state_path{};
 };
 
 using Ros2sIntegrator = integrators::RODAS<pc::PrimordialChem>;
@@ -103,6 +115,14 @@ struct PackedFinalState {
 
 static_assert(sizeof(PackedFinalState) ==
               5 * sizeof(std::int32_t) + (5 + pc::NumSpec) * sizeof(integrators::Real));
+
+struct ComparisonSummary {
+    bool pass{true};
+    long double max_species_rel_error{};
+    long double max_thermodynamic_rel_error{};
+    long double max_rho_rel_error{};
+    std::string failure_message{};
+};
 
 pc::burn_t make_initial_state() {
     pc::burn_t state;
@@ -303,6 +323,17 @@ std::string format_scientific(long double value) {
     return out.str();
 }
 
+bool nearly_equal(integrators::Real value, integrators::Real reference,
+                  integrators::Real rtol, integrators::Real atol) {
+    return std::abs(value - reference) <= atol + rtol * std::abs(reference);
+}
+
+long double relative_error(integrators::Real value, integrators::Real reference,
+                           integrators::Real atol) {
+    const auto denom = std::max(std::abs(reference), atol);
+    return static_cast<long double>(std::abs(value - reference) / denom);
+}
+
 void print_scientific_summary(const char* label, const ValueSummary& summary) {
     std::cout << label << ": [" << format_scientific(summary.min) << ", "
               << format_scientific(summary.median) << ", "
@@ -383,7 +414,8 @@ bool checked_cell_count(int grid_dim, int& num_cells) {
 }
 
 void print_usage(const char* program) {
-    std::cerr << "usage: " << program << " [--grid N] [--perturb]\n";
+    std::cerr << "usage: " << program
+              << " [--grid N] [--perturb] [--compare-final-state FILE]\n";
 }
 
 bool parse_args(int argc, char** argv, Options& options) {
@@ -402,6 +434,23 @@ bool parse_args(int argc, char** argv, Options& options) {
         }
         if (arg == "--perturb") {
             options.perturb = true;
+            continue;
+        }
+        if (arg == "--compare-final-state") {
+            if (i + 1 >= argc) {
+                print_usage(argv[0]);
+                return false;
+            }
+            options.compare_final_state_path = argv[++i];
+            continue;
+        }
+        constexpr std::string_view compare_prefix = "--compare-final-state=";
+        if (arg.rfind(compare_prefix, 0) == 0) {
+            options.compare_final_state_path = argv[i] + compare_prefix.size();
+            if (options.compare_final_state_path.empty()) {
+                print_usage(argv[0]);
+                return false;
+            }
             continue;
         }
 
@@ -439,8 +488,62 @@ PackedFinalState make_packed_final_state(const CollapseState& state, int cell, i
     return packed;
 }
 
+std::string make_backup_path(const std::string& path, int suffix) {
+    std::ostringstream backup;
+    backup << path << ".old." << std::setw(backup_suffix_digits) << std::setfill('0')
+           << suffix;
+    return backup.str();
+}
+
+bool rotate_existing_output(const std::string& path) {
+    namespace fs = std::filesystem;
+
+    std::error_code ec;
+    if (!fs::exists(path, ec)) {
+        if (ec) {
+            std::cerr << "failed to check final-state output file: " << path
+                      << " (" << ec.message() << ")\n";
+            return false;
+        }
+        return true;
+    }
+
+    std::random_device seed;
+    std::mt19937 generator(seed());
+    std::uniform_int_distribution<int> suffix_dist(0, backup_suffix_limit - 1);
+
+    for (int attempt = 0; attempt < backup_rename_attempts; ++attempt) {
+        const std::string backup_path = make_backup_path(path, suffix_dist(generator));
+        if (fs::exists(backup_path, ec)) {
+            if (ec) {
+                std::cerr << "failed to check backup final-state file: " << backup_path
+                          << " (" << ec.message() << ")\n";
+                return false;
+            }
+            continue;
+        }
+
+        fs::rename(path, backup_path, ec);
+        if (!ec) {
+            std::cout << "existing final states moved to: " << backup_path << "\n";
+            return true;
+        }
+
+        std::cerr << "failed to move existing final-state output file from "
+                  << path << " to " << backup_path << " (" << ec.message() << ")\n";
+        return false;
+    }
+
+    std::cerr << "failed to choose a unique backup filename for: " << path << "\n";
+    return false;
+}
+
 bool write_final_states(const std::vector<CollapseState>& cells, int grid_dim,
                         const std::string& path) {
+    if (!rotate_existing_output(path)) {
+        return false;
+    }
+
     std::ofstream output(path, std::ios::binary);
     if (!output) {
         std::cerr << "failed to open final-state output file: " << path << "\n";
@@ -456,6 +559,144 @@ bool write_final_states(const std::vector<CollapseState>& cells, int grid_dim,
         }
     }
     return true;
+}
+
+bool read_final_states(const std::string& path, std::size_t expected_records,
+                       std::vector<PackedFinalState>& records) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) {
+        std::cerr << "failed to open final-state comparison file: " << path << "\n";
+        return false;
+    }
+
+    const auto file_size = input.tellg();
+    if (file_size < 0) {
+        std::cerr << "failed to determine size of final-state comparison file: "
+                  << path << "\n";
+        return false;
+    }
+    const auto byte_count = static_cast<std::uintmax_t>(file_size);
+    const auto expected_bytes =
+        static_cast<std::uintmax_t>(expected_records) * sizeof(PackedFinalState);
+    if (byte_count != expected_bytes) {
+        std::cerr << "final-state comparison file has " << byte_count
+                  << " bytes, expected " << expected_bytes << " bytes ("
+                  << expected_records << " packed records of "
+                  << sizeof(PackedFinalState) << " bytes)\n";
+        return false;
+    }
+
+    records.resize(expected_records);
+    input.seekg(0);
+    input.read(reinterpret_cast<char*>(records.data()),
+               static_cast<std::streamsize>(expected_bytes));
+    if (!input && expected_bytes != 0) {
+        std::cerr << "failed to read final-state comparison file: " << path << "\n";
+        return false;
+    }
+    return true;
+}
+
+ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
+                                       int grid_dim,
+                                       const std::vector<PackedFinalState>& reference) {
+    ComparisonSummary summary{};
+
+    for (std::size_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
+        const auto actual =
+            make_packed_final_state(cells[cell_index], static_cast<int>(cell_index), grid_dim);
+        const auto& expected = reference[cell_index];
+
+        const bool metadata_match =
+            actual.cell == expected.cell &&
+            actual.i == expected.i &&
+            actual.j == expected.j &&
+            actual.k == expected.k &&
+            actual.completed_steps == expected.completed_steps;
+        if (!metadata_match && summary.failure_message.empty()) {
+            std::ostringstream message;
+            message << "metadata mismatch at cell " << cell_index
+                    << " (actual cell/i/j/k/steps "
+                    << actual.cell << "/" << actual.i << "/" << actual.j << "/"
+                    << actual.k << "/" << actual.completed_steps
+                    << ", reference " << expected.cell << "/" << expected.i << "/"
+                    << expected.j << "/" << expected.k << "/"
+                    << expected.completed_steps << ")";
+            summary.failure_message = message.str();
+        }
+        summary.pass = summary.pass && metadata_match;
+
+        for (int n = 0; n < pc::NumSpec; ++n) {
+            const auto idx = static_cast<std::size_t>(n);
+            const auto value = actual.xn[idx];
+            const auto expected_value = expected.xn[idx];
+            const auto rel = relative_error(value, expected_value, atol_spec);
+            summary.max_species_rel_error =
+                std::max(summary.max_species_rel_error, rel);
+            const bool species_match =
+                nearly_equal(value, expected_value, comparison_species_rtol[idx], atol_spec);
+            if (!species_match && summary.failure_message.empty()) {
+                std::ostringstream message;
+                message << "species " << pc::short_spec_names[idx]
+                        << " mismatch at cell " << cell_index
+                        << " (actual " << format_scientific(value)
+                        << ", reference " << format_scientific(expected_value)
+                        << ", relative error " << format_scientific(rel)
+                        << ", rtol " << comparison_species_rtol[idx]
+                        << ", atol " << atol_spec << ")";
+                summary.failure_message = message.str();
+            }
+            summary.pass = summary.pass && species_match;
+        }
+
+        const auto temperature_rel = relative_error(actual.T, expected.T, atol_spec);
+        const auto energy_rel = relative_error(actual.e, expected.e, atol_energy);
+        const auto rho_rel = relative_error(actual.rho, expected.rho, atol_spec);
+        summary.max_thermodynamic_rel_error =
+            std::max(summary.max_thermodynamic_rel_error,
+                     std::max(temperature_rel, energy_rel));
+        summary.max_rho_rel_error = std::max(summary.max_rho_rel_error, rho_rel);
+
+        const bool temperature_match =
+            nearly_equal(actual.T, expected.T, comparison_thermodynamic_rtol, atol_spec);
+        const bool energy_match =
+            nearly_equal(actual.e, expected.e, comparison_thermodynamic_rtol, atol_energy);
+        const bool rho_match = nearly_equal(actual.rho, expected.rho, rtol_spec, atol_spec);
+        if ((!temperature_match || !energy_match || !rho_match) &&
+            summary.failure_message.empty()) {
+            std::ostringstream message;
+            message << "thermodynamic mismatch at cell " << cell_index
+                    << " (T rel " << format_scientific(temperature_rel)
+                    << ", e rel " << format_scientific(energy_rel)
+                    << ", rho rel " << format_scientific(rho_rel) << ")";
+            summary.failure_message = message.str();
+        }
+        summary.pass = summary.pass && temperature_match && energy_match && rho_match;
+    }
+
+    return summary;
+}
+
+bool compare_final_states_from_file(const std::vector<CollapseState>& cells, int grid_dim,
+                                    const std::string& path) {
+    std::vector<PackedFinalState> reference;
+    if (!read_final_states(path, cells.size(), reference)) {
+        return false;
+    }
+
+    const auto summary = compare_final_states(cells, grid_dim, reference);
+    std::cout << "final-state comparison file: " << path << "\n";
+    std::cout << "final-state comparison: " << (summary.pass ? "PASS" : "FAIL")
+              << " (max species rel error "
+              << format_scientific(summary.max_species_rel_error)
+              << ", max thermodynamic rel error "
+              << format_scientific(summary.max_thermodynamic_rel_error)
+              << ", max rho rel error "
+              << format_scientific(summary.max_rho_rel_error) << ")\n";
+    if (!summary.pass && !summary.failure_message.empty()) {
+        std::cout << "first comparison failure: " << summary.failure_message << "\n";
+    }
+    return summary.pass;
 }
 
 std::string final_state_filename(int grid_dim) {
@@ -533,6 +774,13 @@ int main(int argc, char** argv) {
     print_collapse_summary(cells, representative);
     std::cout << "wall time: " << elapsed << " s\n";
     print_stats(cells, total_stats);
+
+    bool comparison_pass = true;
+    if (!options.compare_final_state_path.empty()) {
+        comparison_pass = compare_final_states_from_file(
+            cells, options.grid_dim, options.compare_final_state_path);
+    }
+
     if (options.grid_dim > 1) {
         const std::string final_state_file = final_state_filename(options.grid_dim);
         if (!write_final_states(cells, options.grid_dim, final_state_file)) {
@@ -543,6 +791,10 @@ int main(int argc, char** argv) {
                   << sizeof(PackedFinalState) << " bytes each)\n";
     } else {
         print_state(representative.current);
+    }
+
+    if (!comparison_pass) {
+        return 1;
     }
     return 0;
 }
