@@ -12,7 +12,7 @@
 
 #ifndef INTEGRATORS_HOST_DEVICE
 #if defined(__CUDACC__) || defined(__HIPCC__)
-#define INTEGRATORS_HOST_DEVICE __device__ __forceinline__
+#define INTEGRATORS_HOST_DEVICE __host__ __device__ __forceinline__
 #else
 #define INTEGRATORS_HOST_DEVICE inline
 #endif
