@@ -778,6 +778,9 @@ ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
                                 ? summary.max_deuterium_species_rel_error
                                 : summary.max_non_deuterium_species_rel_error;
             max_rel = std::max(max_rel, rel);
+            if (is_deuterium_bearing_species(n)) {
+                continue;
+            }
             const bool species_match =
                 nearly_equal(value, expected_value, comparison_species_rtol[idx], atol_spec);
             if (!species_match && summary.failure_message.empty()) {

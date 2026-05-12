@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.18)
 project(primordial_ros2s LANGUAGES CXX)
 
 option(PRIMORDIAL_ROS2S_ENABLE_CUDA "Build primordial_ros2s with a CUDA grid-step launcher" OFF)
+option(PRIMORDIAL_ROS2S_CUDA_FMA "Enable fused multiply-add contraction in NVIDIA CUDA builds" OFF)
 set(PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK "128" CACHE STRING
     "CUDA threads per block for the collapse grid-step launcher")
 set(PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT "255" CACHE STRING
@@ -43,7 +44,14 @@ endif()
 
 if(PRIMORDIAL_ROS2S_ENABLE_CUDA AND CMAKE_CUDA_COMPILER_ID MATCHES "NVIDIA")
     target_compile_options(primordial_ros2s PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr --fmad=false>)
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    if(PRIMORDIAL_ROS2S_CUDA_FMA)
+        target_compile_options(primordial_ros2s PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--fmad=true>)
+    else()
+        target_compile_options(primordial_ros2s PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+    endif()
     if(NOT "${PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT}" STREQUAL "")
         target_compile_options(primordial_ros2s PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:--maxrregcount=${PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT}>)
