@@ -118,11 +118,16 @@ static_assert(sizeof(PackedFinalState) ==
 
 struct ComparisonSummary {
     bool pass{true};
-    long double max_species_rel_error{};
+    long double max_deuterium_species_rel_error{};
+    long double max_non_deuterium_species_rel_error{};
     long double max_thermodynamic_rel_error{};
     long double max_rho_rel_error{};
     std::string failure_message{};
 };
+
+constexpr bool is_deuterium_bearing_species(int n) {
+    return n == 4 || n == 5 || n == 7 || n == 9 || n == 10;
+}
 
 pc::burn_t make_initial_state() {
     pc::burn_t state;
@@ -631,8 +636,10 @@ ComparisonSummary compare_final_states(const std::vector<CollapseState>& cells,
             const auto value = actual.xn[idx];
             const auto expected_value = expected.xn[idx];
             const auto rel = relative_error(value, expected_value, atol_spec);
-            summary.max_species_rel_error =
-                std::max(summary.max_species_rel_error, rel);
+            auto& max_rel = is_deuterium_bearing_species(n)
+                                ? summary.max_deuterium_species_rel_error
+                                : summary.max_non_deuterium_species_rel_error;
+            max_rel = std::max(max_rel, rel);
             const bool species_match =
                 nearly_equal(value, expected_value, comparison_species_rtol[idx], atol_spec);
             if (!species_match && summary.failure_message.empty()) {
@@ -687,8 +694,10 @@ bool compare_final_states_from_file(const std::vector<CollapseState>& cells, int
     const auto summary = compare_final_states(cells, grid_dim, reference);
     std::cout << "final-state comparison file: " << path << "\n";
     std::cout << "final-state comparison: " << (summary.pass ? "PASS" : "FAIL")
-              << " (max species rel error "
-              << format_scientific(summary.max_species_rel_error)
+              << " (max deuterium-bearing species rel error "
+              << format_scientific(summary.max_deuterium_species_rel_error)
+              << ", max non-deuterium-bearing species rel error "
+              << format_scientific(summary.max_non_deuterium_species_rel_error)
               << ", max thermodynamic rel error "
               << format_scientific(summary.max_thermodynamic_rel_error)
               << ", max rho rel error "
