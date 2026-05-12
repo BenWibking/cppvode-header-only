@@ -29,7 +29,7 @@ constexpr integrators::Real rtol_energy = 1.0e-6;
 constexpr integrators::Real atol_energy = 1.0e-6;
 constexpr int default_grid_dim = 1;
 constexpr int perturbation_interval = 20;
-constexpr integrators::Real perturbation_amplitude = 0.1;
+constexpr integrators::Real perturbation_amplitude = 0.2;
 
 constexpr std::array<integrators::Real, pc::NumSpec> initial_number_densities{
     1.0e-4, 1.0e-4, 1.0e0,  1.0e-40, 1.0e-40, 1.0e-40, 1.0e-40,
