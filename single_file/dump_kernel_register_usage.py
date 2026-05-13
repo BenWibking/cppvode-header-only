@@ -16,9 +16,10 @@ from pathlib import Path
 
 FIELDS = [
     "rocm_dir",
-    "binary",
+    "runtime_s",
+    #"binary",
     "target",
-    "kernel",
+    #"kernel",
     "sgpr_count",
     "vgpr_count",
     "sgpr_spill_count",
@@ -27,6 +28,9 @@ FIELDS = [
     "private_segment_fixed_size",
     "wavefront_size",
 ]
+
+
+WALL_TIME_RE = re.compile(r"^wall time:\s*([0-9.eE+-]+)\s*s\s*$")
 
 
 def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -78,6 +82,18 @@ def discover_binaries(paths: list[Path]) -> list[Path]:
         elif is_probable_binary(path):
             binaries.append(path)
     return binaries
+
+
+def find_runtime_s(run_dir: Path) -> str:
+    for output in sorted(run_dir.glob("*.out")):
+        try:
+            for line in output.read_text(errors="replace").splitlines():
+                match = WALL_TIME_RE.match(line)
+                if match:
+                    return match.group(1)
+        except OSError:
+            continue
+    return "FAILED"
 
 
 def clean_value(value: str) -> str:
@@ -160,6 +176,7 @@ def dump_binary(binary: Path, rocm_bin: Path | None) -> list[dict[str, str]]:
         readobj = find_rocm_tool(binary, "llvm-readobj")
 
     rows: list[dict[str, str]] = []
+    runtime_s = find_runtime_s(binary.parent)
     with tempfile.TemporaryDirectory(prefix="kernel-register-usage.") as tmp:
         tmpdir = Path(tmp)
         fatbin = tmpdir / "hip_fatbin"
@@ -187,9 +204,10 @@ def dump_binary(binary: Path, rocm_bin: Path | None) -> list[dict[str, str]]:
             for kernel in parse_kernel_metadata(notes):
                 row = {field: "" for field in FIELDS}
                 row["rocm_dir"] = binary.parent.name
-                row["binary"] = str(binary)
+                row["runtime_s"] = runtime_s
+                #row["binary"] = str(binary)
                 row["target"] = target
-                row["kernel"] = kernel.get("name", "")
+                #row["kernel"] = kernel.get("name", "")
                 for field in FIELDS:
                     if field in kernel:
                         row[field] = kernel[field]

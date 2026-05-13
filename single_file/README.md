@@ -105,3 +105,16 @@ If final-state comparison is enabled, the program also prints:
 The process exits with status `0` on successful integration and, when enabled,
 successful final-state comparison. It exits nonzero if integration fails,
 argument parsing fails, an output file cannot be written, or comparison fails.
+
+## Register-usage plots
+
+`kernel_register_usage_by_version.txt` is a CSV listing of runtime and kernel
+register/spill metadata by ROCm version. To plot runtime against SGPR and VGPR
+spill counts:
+
+```bash
+./plot_runtime_vs_spills.py
+```
+
+By default this reads `kernel_register_usage_by_version.txt` and writes
+`runtime_vs_spills.png`. Rows with `runtime_s` set to `FAILED` are skipped.
