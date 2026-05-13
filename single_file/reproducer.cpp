@@ -8386,19 +8386,27 @@ std::string final_state_filename(int grid_dim) {
 int main(int argc, char** argv) {
     std::cout << std::setprecision(std::numeric_limits<integrators::Real>::max_digits10);
 
+    const auto finish = [](bool pass, bool emit_status) {
+        std::cerr.flush();
+        if (emit_status) {
+            std::cout << "\n" << (pass ? "PASS" : "FAIL") << "\n";
+        }
+        return pass ? 0 : 1;
+    };
+
     Options options;
     if (!parse_args(argc, argv, options)) {
-        return 1;
+        return finish(false, false);
     }
     if (options.show_help) {
         print_usage(argv[0]);
-        return 0;
+        return finish(true, false);
     }
 
     int num_cells = 0;
     if (!checked_cell_count(options.grid_dim, num_cells)) {
         std::cerr << "grid dimension is too large: " << options.grid_dim << "\n";
-        return 1;
+        return finish(false, false);
     }
 
     pc::set_redshift(30.0);
@@ -8438,7 +8446,7 @@ int main(int argc, char** argv) {
     const double elapsed = std::chrono::duration<double>(end - start).count();
 
     if (failure != integrators::IntegratorResult::SUCCESS) {
-        return 1;
+        return finish(false, false);
     }
 
     IntegratorStats total_stats{};
@@ -8456,7 +8464,9 @@ int main(int argc, char** argv) {
     print_stats(cells, total_stats);
 
     bool comparison_pass = true;
+    bool comparison_done = false;
     if (!options.compare_final_state_path.empty()) {
+        comparison_done = true;
         comparison_pass = compare_final_states_from_file(
             cells, options.grid_dim, options.compare_final_state_path);
     }
@@ -8464,7 +8474,7 @@ int main(int argc, char** argv) {
     if (options.grid_dim > 1) {
         const std::string final_state_file = final_state_filename(options.grid_dim);
         if (!write_final_states(cells, options.grid_dim, final_state_file)) {
-            return 1;
+            return finish(false, comparison_done);
         }
         std::cout << "final states: " << final_state_file << " ("
                   << cells.size() << " packed records, "
@@ -8474,8 +8484,8 @@ int main(int argc, char** argv) {
     }
 
     if (!comparison_pass) {
-        return 1;
+        return finish(false, comparison_done);
     }
-    return 0;
+    return finish(true, comparison_done);
 }
 #endif
