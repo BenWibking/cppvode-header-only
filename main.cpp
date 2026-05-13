@@ -45,7 +45,8 @@ constexpr integrators::Real atol_spec = 1.0e-4;
 constexpr integrators::Real rtol_energy = 1.0e-6;
 constexpr integrators::Real atol_energy = 1.0e-6;
 constexpr integrators::Real comparison_thermodynamic_rtol = 2.0e-4;
-constexpr int default_grid_dim = 1;
+constexpr int default_grid_dim = 64;
+constexpr const char* default_compare_final_state_path = "final_states_grid64_cpu.bin";
 constexpr int perturbation_interval = 20;
 constexpr integrators::Real perturbation_amplitude = 0.2;
 constexpr int backup_suffix_digits = 6;
@@ -93,9 +94,9 @@ struct CollapseState {
 
 struct Options {
     int grid_dim{default_grid_dim};
-    bool perturb{false};
+    bool perturb{true};
     bool show_help{false};
-    std::string compare_final_state_path{};
+    std::string compare_final_state_path{default_compare_final_state_path};
 };
 
 using Ros2sIntegrator = integrators::RODAS<pc::PrimordialChem>;
@@ -662,7 +663,8 @@ bool checked_cell_count(int grid_dim, int& num_cells) {
 
 void print_usage(const char* program) {
     std::cerr << "usage: " << program
-              << " [--grid N] [--perturb] [--compare-final-state FILE]\n";
+              << " [--grid N] [--perturb|--no-perturb]"
+                 " [--compare-final-state FILE|--no-compare-final-state]\n";
 }
 
 bool parse_args(int argc, char** argv, Options& options) {
@@ -683,12 +685,20 @@ bool parse_args(int argc, char** argv, Options& options) {
             options.perturb = true;
             continue;
         }
+        if (arg == "--no-perturb") {
+            options.perturb = false;
+            continue;
+        }
         if (arg == "--compare-final-state") {
             if (i + 1 >= argc) {
                 print_usage(argv[0]);
                 return false;
             }
             options.compare_final_state_path = argv[++i];
+            continue;
+        }
+        if (arg == "--no-compare-final-state") {
+            options.compare_final_state_path.clear();
             continue;
         }
         constexpr std::string_view compare_prefix = "--compare-final-state=";

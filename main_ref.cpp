@@ -16,7 +16,8 @@ struct RefOptions {
 
 void print_ref_usage(const char* program) {
     std::cerr << "usage: " << program
-              << " [--grid N] [--perturb] [--compare-final-state FILE] [-N THREADS]\n";
+              << " [--grid N] [--perturb|--no-perturb]"
+                 " [--compare-final-state FILE|--no-compare-final-state] [-N THREADS]\n";
 }
 
 bool parse_ref_args(int argc, char** argv, RefOptions& options) {
