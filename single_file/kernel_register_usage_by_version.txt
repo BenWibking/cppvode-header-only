@@ -1,0 +1,9 @@
+rocm_dir,runtime_s,target,sgpr_count,vgpr_count,sgpr_spill_count,vgpr_spill_count,agpr_count,private_segment_fixed_size,wavefront_size
+rocm_6.0.0,FAILED,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2864,2340,0,7448,64
+rocm_6.1.3,FAILED,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2868,2375,0,7440,64
+rocm_6.2.4,324.48184664000001,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2076,2254,0,7336,64
+rocm_6.3.1,341.788642471,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2112,2286,0,7328,64
+rocm_6.4.2,340.21581663500001,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2024,2357,0,7360,64
+rocm_7.0.2,307.75352314100002,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2037,2280,0,7344,64
+rocm_7.1.1,333.62777368100001,hipv4-amdgcn-amd-amdhsa--gfx90a,106,128,2037,2280,0,7344,64
+rocm_7.2.0,328.38786641299998,hipv4-amdgcn-amd-amdhsa--gfx90a,104,128,1544,2082,0,7344,64

@@ -1,136 +1,62 @@
-# cppvode-header-only
+# Primordial ROS2S
 
-A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides two robust integrators suitable for scientific computing applications:
+This branch is a stripped-down primordial chemistry one-zone collapse example.
+All source files are in this directory, and ROS2S is the only integrator path.
 
-- **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF)
-- **Backward Euler**: Simple implicit first-order method
+Build and run:
 
-## Features
+```sh
+make
+build/primordial_ros2s --grid 4 --perturb
+build/primordial_ros2s_ref --grid 4 --perturb -N 8
+build/primordial_ros2s --grid 4 --compare-final-state final_states_grid4_cpu.bin
+```
 
-- **Header-only**: No compilation required, just include the headers
-- **Modern C++20**: Uses standard library containers and modern C++ features including concepts
-- **Self-contained**: No external dependencies beyond standard library
-- **Template-based**: Generic interfaces supporting different problem types
+CUDA and HIP builds use the same grid-step launcher:
 
-## Quick Start
+```sh
+make CUDA=1 CUDA_ARCHS=90
+make HIP=1 HIP_ARCHS=gfx90a
+```
 
-```cpp
-#include <integrators/integrators.hpp>
+The serial executable is `build/primordial_ros2s`. The threaded CPU reference
+executable is `build/primordial_ros2s_ref`.
 
-// Define your ODE problem
-struct MyProblem {
-    static constexpr integrators::size_type neqs = 2;
-    using state_type = std::array<integrators::Real, neqs>;
-    using rhs_type = std::array<integrators::Real, neqs>;
-    
-    // Define dy/dt = f(t, y)
-    static void rhs(integrators::Real t, const state_type& y, rhs_type& dydt) {
-        dydt[0] = -y[0] + y[1];
-        dydt[1] = y[0] - y[1];
-    }
+Options:
+
+- `--grid N`: run `N^3` independent cells.
+- `-N THREADS`: for `primordial_ros2s_ref`, run independent cells across this
+  many CPU threads.
+- `--perturb`: every 20 collapse steps, scale each cell's density and species by
+  a deterministic random factor in `[0.9, 1.1]`.
+- `--compare-final-state FILE`: after the run, read `FILE` as packed final-state
+  records in the same format and print a PASS/FAIL comparison. The comparison
+  uses the same network tolerances as the `cusolverdx` branch PASS test:
+  per-species relative tolerances, `1e-4` relative tolerance for temperature and
+  internal energy, `1e-4` relative tolerance for density, and the existing
+  species/energy absolute tolerances.
+
+For `--grid 1`, the final state is printed to stdout. For `--grid N` with
+`N > 1`, stdout contains only the run summary and all cell final states are
+written to `final_states_grid<N>_<backend>.bin` as consecutive packed records,
+where `<backend>` is `cpu`, `cuda`, or `hip`:
+
+If the output file already exists, it is first moved to a unique
+`*.old.######` filename with randomly chosen digits, then the new output file is
+written.
+
+```c++
+#pragma pack(push, 1)
+struct PackedFinalState {
+    int32_t cell;
+    int32_t i, j, k;
+    int32_t completed_steps;
+    double time;
+    double density_driver;
+    double rho;
+    double T;
+    double e;
+    double xn[14];
 };
-
-// Use an integrator
-auto integrator = integrators::BackwardEuler<MyProblem>{};
-auto state = integrators::BackwardEulerState<2>{};
-
-// Set up initial conditions
-state.t = 0.0;
-state.tout = 1.0;
-state.y = {1.0, 0.0};
-state.rtol = 1.e-6;
-state.atol = 1.e-12;
-
-MyProblem::state_type problem_state{};
-auto result = integrator.integrate(problem_state, state);
+#pragma pack(pop)
 ```
-
-## Build, Run, and Test
-
-```bash
-# Configure
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-# Build
-cmake --build build -j
-
-# Run all tests
-ctest --test-dir build --output-on-failure
-
-# Run examples
-build/examples/simple_ode
-build/examples/robertson
-```
-
-Useful options:
-- `-DBUILD_TESTS=ON` and `-DBUILD_EXAMPLES=ON` (both ON by default)
-- `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE internal logs
-- `-DWARNINGS_AS_ERRORS=ON` to treat C/C++ warnings as errors (matches CI; excludes CUDA/Fortran)
-- Debug builds enable AddressSanitizer: `-DCMAKE_BUILD_TYPE=Debug`
-
-## Development Tips
-
-- Compiler selection: pass `-DCMAKE_CXX_COMPILER=/path/to/clang++` (or `g++`) to `cmake` or set `CXX` in the environment.
-- CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). The CUDA test target `test_vode_gpu` builds only when CUDA is available.
-- LAPACK support removed: the library always uses the built-in LU/solve.
-- Reproducibility: record `-DCMAKE_CXX_COMPILER` and `-DCMAKE_BUILD_TYPE` with results. Use `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE traces in Debug builds.
-
-## Problem Interface Requirements
-
-Your problem struct must provide:
-
-```cpp
-struct YourProblem {
-    static constexpr integrators::size_type neqs = N;  // Number of equations
-    using state_type = std::array<integrators::Real, neqs>;
-    using rhs_type = std::array<integrators::Real, neqs>;
-    
-    // Required: RHS function dy/dt = f(t, y)
-    static void rhs(integrators::Real t, const state_type& y, rhs_type& dydt);
-    
-    // Optional: Analytic Jacobian df/dy (recommended for stiff problems)
-    static void jacobian(integrators::Real t, const state_type& y, jacobian_type& jac);
-};
-```
-
-## Directory Structure
-
-```
-include/integrators/          # Header-only library (public API)
-├── integrators.hpp           # Main umbrella header
-├── integrator_types.hpp      # Core types, traits, states
-├── linear_algebra.hpp        # Linear algebra utilities (LU/solve, helpers)
-├── backward_euler.hpp        # Backward Euler integrator
-└── vode.hpp                  # VODE (BDF) integrator
-
-examples/                     # Example programs
-├── simple_ode.cpp            # dy/dt = -y demo (BE + VODE)
-├── robertson.cpp             # Robertson stiff kinetics (VODE)
-└── robertson_dvode.f90       # Fortran driver to compare with DVODE
-
-tests/                        # Executable tests (run via ctest)
-├── test_linear_algebra.cpp   # Linear algebra unit tests
-├── test_convergence.cpp      # BE and VODE convergence/error-control
-├── test_vode_stiff_decay.cpp # Stiff decay regression
-├── test_vode_hires.cpp       # HIRES stiff benchmark
-├── test_vode_nelson.cpp      # Nelson astrochemistry check
-├── test_vode_robertson_strict.cpp # Strict Robertson tolerances
-└── test_vode_gpu.cu          # Optional CUDA test (if CUDA enabled)
-
-extern/                       # External references for comparisons
-└── dvode.f                   # Original DVODE Fortran source (reference)
-
-scripts/                      # Utility scripts for comparisons/plots
-├── compare_decisions.py
-└── compare_steps.py
-
-CMakeLists.txt                # Top-level CMake: builds examples/tests, installs headers
-```
-
-## Credits
-
-This library is extracted and adapted from the [AMReX Microphysics](https://github.com/AMReX-Astro/Microphysics) framework, which provides physics modules for astrophysical simulations. The original integrators were developed for stellar evolution and explosive astrophysics applications.
-
-## License
-
-This library is licensed under the 3-clause BSD license.

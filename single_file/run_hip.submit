@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH -t 0:10:00
+#SBATCH -A ast236
+#SBATCH -N 1
+#SBATCH -p batch
+#SBATCH -J quokka
+#SBATCH -o logs/%x_%j.out
+#SBATCH -e logs/%x_%j.out
+#SBATCH --mail-type=FAIL
+#SBATCH --gpu-bind=closest
+#SBATCH -C nvme
+
+module load cce/20.0.0
+module load rocm/6.0.0
+
+./reproducer_hip_rocm_6.0.0
+

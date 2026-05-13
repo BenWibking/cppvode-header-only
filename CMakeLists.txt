@@ -1,111 +1,76 @@
-# ABOUTME: CMake build configuration for header-only integrator library
-# ABOUTME: Builds examples and tests with modern C++ standards
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.21)
 
-project(HeaderOnlyIntegrators 
-    VERSION 1.0.0
-    DESCRIPTION "Header-only ODE integrator library extracted from AMReX Microphysics"
-    LANGUAGES CXX Fortran)
+project(primordial_ros2s LANGUAGES CXX)
 
-option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+option(PRIMORDIAL_ROS2S_ENABLE_CUDA "Build primordial_ros2s with a CUDA grid-step launcher" OFF)
+option(PRIMORDIAL_ROS2S_ENABLE_HIP "Build primordial_ros2s with a HIP grid-step launcher" OFF)
+option(PRIMORDIAL_ROS2S_CUDA_FMA "Enable fused multiply-add contraction in NVIDIA CUDA builds" OFF)
+set(PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK "128" CACHE STRING
+    "GPU threads per block for the collapse grid-step launcher")
+set(PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT "255" CACHE STRING
+    "nvcc --maxrregcount value for primordial_ros2s CUDA builds")
 
-# Optionally enable CUDA if a compiler is available (for GPU tests)
-include(CheckLanguage)
-check_language(CUDA)
-if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
-    enable_language(CUDA)
-    message(STATUS "CUDA compiler detected: enabling CUDA language")
-    # Suppress host compiler pedantic warnings when compiling CUDA sources
-    # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
-    add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
-elseif(BUILD_CUDA_TESTS)
-    message(WARNING "BUILD_CUDA_TESTS=ON but no CUDA compiler detected; GPU tests will be skipped")
+if(PRIMORDIAL_ROS2S_ENABLE_CUDA AND PRIMORDIAL_ROS2S_ENABLE_HIP)
+    message(FATAL_ERROR "Enable at most one of PRIMORDIAL_ROS2S_ENABLE_CUDA or PRIMORDIAL_ROS2S_ENABLE_HIP")
 endif()
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Add the header-only library as interface target
-add_library(integrators INTERFACE)
-target_include_directories(integrators INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-
-# System LAPACK support removed; always use built-in LU/solve
-
-# Optional verbose debug logging for VODE internals
-# Enable with: -DINTEGRATORS_VODE_DEBUG=ON
-option(INTEGRATORS_VODE_DEBUG "Enable verbose VODE debug logging" OFF)
-if(INTEGRATORS_VODE_DEBUG)
-    target_compile_definitions(integrators INTERFACE VODE_DEBUG)
+if(PRIMORDIAL_ROS2S_ENABLE_CUDA)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_EXTENSIONS OFF)
+endif()
+if(PRIMORDIAL_ROS2S_ENABLE_HIP)
+    enable_language(HIP)
+    set(CMAKE_HIP_STANDARD 20)
+    set(CMAKE_HIP_STANDARD_REQUIRED ON)
+    set(CMAKE_HIP_EXTENSIONS OFF)
 endif()
 
-# Treat warnings as errors (opt-in, excludes CUDA/Fortran)
-option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortran)" OFF)
+find_package(Threads REQUIRED)
 
-# Compiler flags
+add_executable(primordial_ros2s main.cpp)
+target_include_directories(primordial_ros2s PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(PRIMORDIAL_ROS2S_ENABLE_CUDA)
+    set_source_files_properties(main.cpp PROPERTIES LANGUAGE CUDA)
+    target_compile_definitions(primordial_ros2s PRIVATE
+        PRIMORDIAL_ROS2S_ENABLE_CUDA
+        PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=${PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK})
+endif()
+if(PRIMORDIAL_ROS2S_ENABLE_HIP)
+    set_source_files_properties(main.cpp PROPERTIES LANGUAGE HIP)
+    target_compile_definitions(primordial_ros2s PRIVATE
+        PRIMORDIAL_ROS2S_ENABLE_HIP
+        PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=${PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK})
+endif()
+
+add_executable(primordial_ros2s_ref main_ref.cpp)
+target_include_directories(primordial_ros2s_ref PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(primordial_ros2s_ref PRIVATE Threads::Threads)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(integrators INTERFACE
-        -Wall -Wextra -Wpedantic -O3
-        $<$<CONFIG:Debug>:-g -O0 -fsanitize=address>
-    )
-    if(WARNINGS_AS_ERRORS)
-        target_compile_options(integrators INTERFACE
-            $<$<COMPILE_LANGUAGE:C>:-Werror>
-            $<$<COMPILE_LANGUAGE:CXX>:-Werror>
-        )
+    target_compile_options(primordial_ros2s PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -ffp-contract=off>)
+    target_compile_options(primordial_ros2s_ref PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -ffp-contract=off>)
+endif()
+
+if(PRIMORDIAL_ROS2S_ENABLE_CUDA AND CMAKE_CUDA_COMPILER_ID MATCHES "NVIDIA")
+    target_compile_options(primordial_ros2s PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    if(PRIMORDIAL_ROS2S_CUDA_FMA)
+        target_compile_options(primordial_ros2s PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--fmad=true>)
+    else()
+        target_compile_options(primordial_ros2s PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
     endif()
-    target_link_options(integrators INTERFACE
-        $<$<CONFIG:Debug>:-fsanitize=address>
-    )
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    target_compile_options(integrators INTERFACE /W4 /O2)
-    if(WARNINGS_AS_ERRORS)
-        target_compile_options(integrators INTERFACE
-            $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/WX>
-        )
+    if(NOT "${PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT}" STREQUAL "")
+        target_compile_options(primordial_ros2s PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--maxrregcount=${PRIMORDIAL_ROS2S_CUDA_MAXREGCOUNT}>)
     endif()
 endif()
-
-# Enable testing
-enable_testing()
-
-# Build examples
-option(BUILD_EXAMPLES "Build example programs" ON)
-if(BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
-
-# Build tests
-option(BUILD_TESTS "Build test programs" ON)
-if(BUILD_TESTS)
-    add_subdirectory(tests)
-endif()
-
-# Installation (header-only)
-install(DIRECTORY include/ 
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.hpp")
-
-# Export targets
-install(TARGETS integrators
-    EXPORT integrators-targets
-    INCLUDES DESTINATION include)
-
-install(EXPORT integrators-targets
-    FILE integrators-config.cmake
-    DESTINATION lib/cmake/integrators)
-
-# Generate version file
-include(CMakePackageConfigHelpers)
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/integrators-config-version.cmake"
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion)
-
-install(FILES 
-    "${CMAKE_CURRENT_BINARY_DIR}/integrators-config-version.cmake"
-    DESTINATION lib/cmake/integrators)
