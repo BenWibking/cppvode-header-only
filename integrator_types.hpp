@@ -11,8 +11,10 @@
 #include <type_traits>
 
 #ifndef INTEGRATORS_HOST_DEVICE
-#if defined(__CUDACC__) || defined(__HIPCC__)
+#if defined(__CUDACC__)
 #define INTEGRATORS_HOST_DEVICE __host__ __device__ __forceinline__
+#elif defined(__HIPCC__)
+#define INTEGRATORS_HOST_DEVICE __host__ __device__ __attribute__((always_inline)) inline
 #else
 #define INTEGRATORS_HOST_DEVICE inline
 #endif

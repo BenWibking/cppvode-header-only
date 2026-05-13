@@ -12,6 +12,13 @@ build/primordial_ros2s_ref --grid 4 --perturb -N 8
 build/primordial_ros2s --grid 4 --compare-final-state final_states_grid4_cpu.bin
 ```
 
+CUDA and HIP builds use the same grid-step launcher:
+
+```sh
+make CUDA=1 CUDA_ARCHS=90
+make HIP=1 HIP_ARCHS=gfx90a
+```
+
 The serial executable is `build/primordial_ros2s`. The threaded CPU reference
 executable is `build/primordial_ros2s_ref`.
 

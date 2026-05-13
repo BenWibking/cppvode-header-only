@@ -32,7 +32,7 @@ inline Real& redshift_storage() {
 }
 
 INTEGRATORS_HOST_DEVICE Real redshift() {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     return default_redshift;
 #else
     return redshift_storage();

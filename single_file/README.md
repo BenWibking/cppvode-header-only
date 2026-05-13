@@ -20,6 +20,12 @@ nvcc -x cu -std=c++20 -O3 -arch=sm_90 --expt-relaxed-constexpr --fmad=false --ma
 The CUDA command matches the Makefile defaults: CUDA architecture `90`, block
 size `128`, FMA contraction disabled, and `--maxrregcount=255`.
 
+HIP build with the default project settings:
+
+```bash
+hipcc -x hip -std=c++20 -O3 --offload-arch=gfx90a -DPRIMORDIAL_ROS2S_ENABLE_HIP -DPRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=128 -I. single_file/reproducer.cpp -o reproducer_hip
+```
+
 ## Run
 
 Show the available options:
@@ -40,6 +46,12 @@ Run the CUDA reproducer:
 ./reproducer_cuda
 ```
 
+Run the HIP reproducer:
+
+```bash
+./reproducer_hip
+```
+
 By default, the run uses a `64^3` cell grid, enables deterministic density
 perturbations, and compares the final state against
 `final_states_grid64_cpu.bin`. To run without any reference comparison:
@@ -47,6 +59,7 @@ perturbations, and compares the final state against
 ```bash
 ./reproducer --no-compare-final-state
 ./reproducer_cuda --no-compare-final-state
+./reproducer_hip --no-compare-final-state
 ```
 
 To run a smaller case:
@@ -54,13 +67,15 @@ To run a smaller case:
 ```bash
 ./reproducer --grid 1 --no-compare-final-state
 ./reproducer_cuda --grid 1 --no-compare-final-state
+./reproducer_hip --grid 1 --no-compare-final-state
 ```
 
 For a `--grid 1` run, the program prints the final representative cell state
 directly. For larger grids, it writes a packed binary final-state file named
 `final_states_grid<N>_<backend>.bin`, for example
-`final_states_grid64_cpu.bin` or `final_states_grid64_cuda.bin`. If that output
-file already exists, the old file is moved aside with an `.old.<suffix>` name.
+`final_states_grid64_cpu.bin`, `final_states_grid64_cuda.bin`, or
+`final_states_grid64_hip.bin`. If that output file already exists, the old file
+is moved aside with an `.old.<suffix>` name.
 
 ## Output
 

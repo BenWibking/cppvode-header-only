@@ -19,6 +19,18 @@
 
 #if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA)
 #include <cuda_runtime.h>
+#elif defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
+#include <hip/hip_runtime.h>
+#define cudaError_t hipError_t
+#define cudaSuccess hipSuccess
+#define cudaGetErrorString hipGetErrorString
+#define cudaMalloc hipMalloc
+#define cudaFree(ptr) static_cast<void>(hipFree(ptr))
+#define cudaMemcpy hipMemcpy
+#define cudaMemcpyHostToDevice hipMemcpyHostToDevice
+#define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
+#define cudaGetLastError hipGetLastError
+#define cudaDeviceSynchronize hipDeviceSynchronize
 #endif
 
 #include "primordial_chem.hpp"
@@ -30,6 +42,10 @@ namespace {
 
 #if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA)
 #define PRIMORDIAL_HOST_DEVICE __host__ __device__ __forceinline__
+#elif defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
+#define PRIMORDIAL_HOST_DEVICE __host__ __device__ __attribute__((always_inline)) inline
+#endif
+#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA) || defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
 #ifndef PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK
 #define PRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK 128
 #endif
@@ -102,9 +118,9 @@ struct Options {
 using Ros2sIntegrator = integrators::RODAS<pc::PrimordialChem>;
 
 constexpr const char* backend_name() {
-#if defined(__CUDACC__)
+#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA)
     return "cuda";
-#elif defined(__HIPCC__)
+#elif defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
     return "hip";
 #else
     return "cpu";
@@ -274,7 +290,7 @@ PRIMORDIAL_HOST_DEVICE bool advance_collapse_step(CollapseState& collapse, int c
 
     const auto result = burn_ros2s(collapse.current, dt, collapse.stats);
     if (result != integrators::IntegratorResult::SUCCESS) {
-#if !defined(__CUDA_ARCH__)
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
         std::cerr << "ROS2S failed on collapse step " << step
                   << " cell " << cell
                   << " with code " << static_cast<int>(result) << "\n";
@@ -293,7 +309,7 @@ PRIMORDIAL_HOST_DEVICE bool advance_collapse_step(CollapseState& collapse, int c
     return false;
 }
 
-#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA)
+#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA) || defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
 bool check_cuda(cudaError_t status, const char* action) {
     if (status == cudaSuccess) {
         return true;
@@ -393,7 +409,7 @@ integrators::IntegratorResult run_cells_cuda(std::vector<CollapseState>& cells,
 
         if (host_failure != success) {
             result = static_cast<integrators::IntegratorResult>(host_failure);
-            std::cerr << "ROS2S failed on CUDA collapse step " << step
+            std::cerr << "ROS2S failed on " << backend_name() << " collapse step " << step
                       << " with code " << host_failure << "\n";
             break;
         }
@@ -1065,7 +1081,7 @@ int main(int argc, char** argv) {
     int completed_global_steps = 0;
 
     const auto start = std::chrono::steady_clock::now();
-#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA)
+#if defined(PRIMORDIAL_ROS2S_ENABLE_CUDA) || defined(PRIMORDIAL_ROS2S_ENABLE_HIP)
     failure = run_cells_cuda(cells, options.perturb, completed_global_steps);
 #else
     for (int step = 0; step < max_collapse_steps; ++step) {
