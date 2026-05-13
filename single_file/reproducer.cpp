@@ -84,7 +84,6 @@ constexpr Real powi(Real x) {
 
 #include <array>
 #include <cmath>
-#include "integrator_types.hpp"
 
 namespace integrators {
 namespace linalg {
@@ -196,7 +195,6 @@ INTEGRATORS_HOST_DEVICE void lu_solve(const std::array<std::array<Real, N>, N>& 
 #include <cstddef>
 #include <string_view>
 
-#include "integrator_types.hpp"
 
 namespace integrators::primordial_chem {
 
@@ -7073,8 +7071,6 @@ struct PrimordialChem {
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include "integrator_types.hpp"
-#include "linear_algebra.hpp"
 
 namespace integrators {
 
@@ -7389,8 +7385,6 @@ public:
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #endif
 
-#include "primordial_chem.hpp"
-#include "rodas.hpp"
 
 namespace pc = integrators::primordial_chem;
 

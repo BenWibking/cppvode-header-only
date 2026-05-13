@@ -1,20 +1,20 @@
-# Single-file reproducer
+# Chemical kinetic reproducer (Quokka)
 
 `reproducer.cpp` is a standalone translation unit for the primordial chemistry
-collapse-grid reproducer. Run the commands below from the repository root.
+collapse-grid reproducer. Run the commands below from this directory.
 
 ## Build
 
 CPU build:
 
 ```bash
-c++ -std=c++20 -O3 -I. single_file/reproducer.cpp -o reproducer
+c++ -std=c++20 -O3 -I. reproducer.cpp -o reproducer
 ```
 
 CUDA build with the default project settings:
 
 ```bash
-nvcc -x cu -std=c++20 -O3 -arch=sm_90 --expt-relaxed-constexpr --fmad=false --maxrregcount=255 -DPRIMORDIAL_ROS2S_ENABLE_CUDA -DPRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=128 -I. single_file/reproducer.cpp -o reproducer_cuda
+nvcc -x cu -std=c++20 -O3 -arch=sm_90 --expt-relaxed-constexpr --fmad=false --maxrregcount=255 -DPRIMORDIAL_ROS2S_ENABLE_CUDA -DPRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=128 -I. reproducer.cpp -o reproducer_cuda
 ```
 
 The CUDA command matches the Makefile defaults: CUDA architecture `90`, block
@@ -23,7 +23,7 @@ size `128`, FMA contraction disabled, and `--maxrregcount=255`.
 HIP build with the default project settings:
 
 ```bash
-hipcc -x hip -std=c++20 -O3 --offload-arch=gfx90a -DPRIMORDIAL_ROS2S_ENABLE_HIP -DPRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=128 -I. single_file/reproducer.cpp -o reproducer_hip
+hipcc -x hip -std=c++20 -O3 --offload-arch=gfx90a -DPRIMORDIAL_ROS2S_ENABLE_HIP -DPRIMORDIAL_ROS2S_CUDA_THREADS_PER_BLOCK=128 -I. reproducer.cpp -o reproducer_hip
 ```
 
 ## Run
