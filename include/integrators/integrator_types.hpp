@@ -73,21 +73,6 @@ struct problem_jacobian<Problem, N, std::void_t<typename Problem::jacobian_type>
 };
 
 template<typename Problem, typename = void>
-struct problem_shifted_negated_jacobian {
-    static constexpr bool available = false;
-};
-
-template<typename Problem>
-struct problem_shifted_negated_jacobian<Problem, std::void_t<decltype(
-    Problem::jacobian_shifted_negated(
-        std::declval<Real>(),
-        std::declval<const typename Problem::state_type&>(),
-        std::declval<Real>(),
-        std::declval<typename Problem::jacobian_type&>()))>> {
-    static constexpr bool available = true;
-};
-
-template<typename Problem, typename = void>
 struct problem_rhs_aliasing {
     static constexpr bool available = false;
 };
@@ -121,8 +106,6 @@ struct ProblemTraits {
     using preconditioner_type = typename detail::problem_preconditioner<Problem>::type;
     static constexpr bool has_custom_preconditioner = detail::problem_preconditioner<Problem>::available;
     static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
-    static constexpr bool has_shifted_negated_jacobian =
-        detail::problem_shifted_negated_jacobian<Problem>::available;
     static constexpr bool rhs_allows_input_output_alias =
         detail::problem_rhs_aliasing<Problem>::available;
     static constexpr bool has_ros2s_static_tolerances =

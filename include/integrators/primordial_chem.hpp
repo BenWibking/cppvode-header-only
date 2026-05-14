@@ -6856,27 +6856,6 @@ struct JacobianAdapter {
     }
 };
 
-struct ShiftedNegatedJacobianAdapter {
-    struct Entry {
-        Real& value;
-        Real diagonal;
-
-        INTEGRATORS_HOST_DEVICE Entry& operator=(Real jacobian_value) {
-            value = diagonal - jacobian_value;
-            return *this;
-        }
-    };
-
-    std::array<std::array<Real, neqs>, neqs>& matrix;
-    Real diagonal_shift;
-
-    INTEGRATORS_HOST_DEVICE Entry operator()(int row, int col) {
-        const auto i = static_cast<std::size_t>(row - 1);
-        const auto j = static_cast<std::size_t>(col - 1);
-        return Entry{matrix[i][j], (row == col) ? diagonal_shift : 0.0};
-    }
-};
-
 struct PrimordialChem {
     static constexpr integrators::size_type neqs = primordial_chem::neqs;
     static constexpr bool rhs_allows_input_output_alias = true;
@@ -6915,22 +6894,6 @@ struct PrimordialChem {
 
         burn_t state = burn_state_from_y(y);
         JacobianAdapter adapter{jac};
-        actual_jac(state, adapter);
-    }
-
-    INTEGRATORS_HOST_DEVICE static void jacobian_shifted_negated([[maybe_unused]] Real t,
-                                                                  const state_type& y,
-                                                                  Real diagonal_shift,
-                                                                  jacobian_type& matrix) {
-        for (auto& row : matrix) {
-            row.fill(0.0);
-        }
-        for (integrators::size_type i = 0; i < neqs; ++i) {
-            matrix[i][i] = diagonal_shift;
-        }
-
-        burn_t state = burn_state_from_y(y);
-        ShiftedNegatedJacobianAdapter adapter{matrix, diagonal_shift};
         actual_jac(state, adapter);
     }
 };

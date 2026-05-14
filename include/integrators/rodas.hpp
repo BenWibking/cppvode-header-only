@@ -182,10 +182,6 @@ private:
         return AnalyticJacobianOnly || ProblemTraits<Problem>::has_analytic_jacobian;
     }
 
-    static constexpr bool can_assemble_shifted_negated_jacobian() {
-        return ProblemTraits<Problem>::has_shifted_negated_jacobian;
-    }
-
     static INTEGRATORS_HOST_DEVICE void eval_jacobian(State& s, Real x) {
         if constexpr (AnalyticJacobianOnly) {
             Problem::jacobian(x, s.y, s.matrix());
@@ -210,35 +206,18 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac, Real x) {
+    static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac) {
         static_assert(!UsePrimordialGiftFactorization || N == 15,
                       "GIFT factorization path is specialized for the primordial 15x15 system");
-        if constexpr (can_assemble_shifted_negated_jacobian()) {
-            if (s.jacobian_analytic) {
-                Problem::jacobian_shifted_negated(x, s.y, fac, s.matrix());
-            } else {
-                for (size_type i = 0; i < N; ++i) {
-                    for (size_type j = 0; j < N; ++j) {
-                        if constexpr (AnalyticJacobianOnly) {
-                            s.matrix()[i][j] = -s.matrix()[i][j];
-                        } else {
-                            s.matrix()[i][j] = -s.fjac[i][j];
-                        }
-                    }
-                    s.matrix()[i][i] += fac;
+        for (size_type i = 0; i < N; ++i) {
+            for (size_type j = 0; j < N; ++j) {
+                if constexpr (AnalyticJacobianOnly) {
+                    s.matrix()[i][j] = -s.matrix()[i][j];
+                } else {
+                    s.matrix()[i][j] = -s.fjac[i][j];
                 }
             }
-        } else {
-            for (size_type i = 0; i < N; ++i) {
-                for (size_type j = 0; j < N; ++j) {
-                    if constexpr (AnalyticJacobianOnly) {
-                        s.matrix()[i][j] = -s.matrix()[i][j];
-                    } else {
-                        s.matrix()[i][j] = -s.fjac[i][j];
-                    }
-                }
-                s.matrix()[i][i] += fac;
-            }
+            s.matrix()[i][i] += fac;
         }
         int info = 0;
         if constexpr (UsePrimordialGiftFactorization) {
@@ -380,31 +359,20 @@ public:
                 last = true;
             }
 
-            const bool direct_shifted_jacobian =
-                s.jacobian_analytic && can_assemble_shifted_negated_jacobian();
-            if (!direct_shifted_jacobian &&
-                !AnalyticJacobianOnly && !(s.jacobian_analytic && uses_analytic_jacobian())) {
+            if (!AnalyticJacobianOnly && !(s.jacobian_analytic && uses_analytic_jacobian())) {
                 rhs(x, s.y, s.ak1);
                 record_rhs(s);
             }
-            if (!direct_shifted_jacobian) {
-                if constexpr (!AnalyticJacobianOnly) {
-                    eval_jacobian(s, x);
-                }
+            if constexpr (!AnalyticJacobianOnly) {
+                eval_jacobian(s, x);
             }
 
             for (;;) {
                 const Real fac = 1.0 / (h * C::gamma);
-                if (!direct_shifted_jacobian) {
-                    if constexpr (AnalyticJacobianOnly) {
-                        eval_jacobian(s, x);
-                    }
-                } else {
-                    if constexpr (CollectStats) {
-                        s.n_jac += 1;
-                    }
+                if constexpr (AnalyticJacobianOnly) {
+                    eval_jacobian(s, x);
                 }
-                if (decompose(s, fac, x) != 0) {
+                if (decompose(s, fac) != 0) {
                     nsing += 1;
                     if (nsing >= 5) {
                         s.t = x;
