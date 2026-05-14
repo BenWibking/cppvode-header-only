@@ -7,55 +7,43 @@
 #include <array>
 #include <cmath>
 #include <limits>
+
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
 
 namespace integrators {
 
-template<size_type N, bool AnalyticJacobianOnly>
-struct RODASJacobianStorage {
+template <size_type N, bool AnalyticJacobianOnly> struct RODASJacobianStorage {
     std::array<std::array<Real, N>, N> fjac{};
 };
 
-template<size_type N>
-struct RODASJacobianStorage<N, true> {};
+template <size_type N> struct RODASJacobianStorage<N, true> {};
 
-template<size_type N, bool IncludeRhsScratch>
-struct RODASRhsScratchStorage {
+template <size_type N, bool IncludeRhsScratch> struct RODASRhsScratchStorage {
     std::array<Real, N> dy{};
 
-    INTEGRATORS_HOST_DEVICE std::array<Real, N>& rhs_scratch(std::array<Real, N>&) {
-        return dy;
-    }
+    INTEGRATORS_HOST_DEVICE std::array<Real, N> &rhs_scratch(std::array<Real, N> &) { return dy; }
 };
 
-template<size_type N>
-struct RODASRhsScratchStorage<N, false> {
-    INTEGRATORS_HOST_DEVICE std::array<Real, N>& rhs_scratch(std::array<Real, N>& alias) {
+template <size_type N> struct RODASRhsScratchStorage<N, false> {
+    INTEGRATORS_HOST_DEVICE std::array<Real, N> &rhs_scratch(std::array<Real, N> &alias) {
         return alias;
     }
 };
 
-template<size_type N, bool ExternalMatrixStorage>
-struct RODASMatrixStorage {
+template <size_type N, bool ExternalMatrixStorage> struct RODASMatrixStorage {
     std::array<std::array<Real, N>, N> e{};
 
-    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N>& matrix() {
-        return e;
-    }
+    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N> &matrix() { return e; }
 };
 
-template<size_type N>
-struct RODASMatrixStorage<N, true> {
-    std::array<std::array<Real, N>, N>* external_e{nullptr};
+template <size_type N> struct RODASMatrixStorage<N, true> {
+    std::array<std::array<Real, N>, N> *external_e{nullptr};
 
-    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N>& matrix() {
-        return *external_e;
-    }
+    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N> &matrix() { return *external_e; }
 };
 
-template<size_type N, bool StaticTolerances>
-struct RODASToleranceStorage {
+template <size_type N, bool StaticTolerances> struct RODASToleranceStorage {
     Real rtol{1.e-6};
     Real atol{1.e-12};
     bool use_vector_tolerances{false};
@@ -63,11 +51,9 @@ struct RODASToleranceStorage {
     std::array<Real, N> atol_vec{};
 };
 
-template<size_type N>
-struct RODASToleranceStorage<N, true> {};
+template <size_type N> struct RODASToleranceStorage<N, true> {};
 
-template<bool CollectStats>
-struct RODASStatsStorage {
+template <bool CollectStats> struct RODASStatsStorage {
     int n_step{0};
     int n_rhs{0};
     int n_jac{0};
@@ -84,11 +70,10 @@ struct RODASStatsStorage {
     int step_limited_by_fac_max{0};
 };
 
-template<>
-struct RODASStatsStorage<false> {};
+template <> struct RODASStatsStorage<false> {};
 
-template<size_type N, bool AnalyticJacobianOnly = false, bool ExternalMatrixStorage = false,
-         bool IncludeRhsScratch = true, bool StaticTolerances = false, bool CollectStats = true>
+template <size_type N, bool AnalyticJacobianOnly = false, bool ExternalMatrixStorage = false,
+          bool IncludeRhsScratch = true, bool StaticTolerances = false, bool CollectStats = true>
 struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
                     public RODASStatsStorage<CollectStats>,
                     public RODASJacobianStorage<N, AnalyticJacobianOnly>,
@@ -112,50 +97,134 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
     std::array<Real, N> ynew{};
     std::array<Real, N> ak1{};
     std::array<Real, N> ak2{};
+    std::array<Real, N> ak3{};
     std::array<Real, N> work{};
     std::array<int, N> ip{};
 };
 
 namespace detail {
 
-struct ROS2SCoefficients {
+enum class RosenbrockMethod { ROS2S, SanduA, SanduB, SanduD };
+
+enum class RosenbrockErrorEstimator { StageWeights, FirstStage, EmbeddedWeights };
+
+template <RosenbrockMethod Method> struct RosenbrockCoefficients;
+
+template <> struct RosenbrockCoefficients<RosenbrockMethod::ROS2S> {
+    static constexpr int stages = 3;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::StageWeights;
     static constexpr Real gamma = 0.292893218813452;
-    static constexpr Real ct2 = 0.585786437626905;
-    static constexpr Real a21 = 2.0000000000000036;
-    static constexpr Real a31 = 6.828427124746214;
-    static constexpr Real a32 = 3.4142135623731007;
-    static constexpr Real c21 = -6.828427124746214;
-    static constexpr Real c31 = -10.949747468305889;
-    static constexpr Real c32 = -7.535533905932761;
-    static constexpr Real b1 = 6.828427124746214;
-    static constexpr Real b2 = 3.414213562373101;
-    static constexpr Real b3 = 1.0;
-    static constexpr Real e1 = -0.23570226039551292;
-    static constexpr Real e2 = -0.23570226039551567;
-    static constexpr Real e3 = -0.13807118745769906;
+    static constexpr std::array<Real, 4> alpha{0.0, 0.585786437626905, 1.0, 0.0};
+    static constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{2.0000000000000036, 0.0, 0.0, 0.0}},
+        {{6.828427124746214, 3.4142135623731007, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-6.828427124746214, 0.0, 0.0, 0.0}},
+        {{-10.949747468305889, -7.535533905932761, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<Real, 4> m{6.828427124746214, 3.414213562373101, 1.0, 0.0};
+    static constexpr std::array<Real, 4> err{-0.23570226039551292, -0.23570226039551567,
+                                             -0.13807118745769906, 0.0};
+    static constexpr Real first_stage_weight = 0.0;
+};
+
+template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduA> {
+    static constexpr int stages = 3;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::FirstStage;
+    static constexpr Real gamma = 0.7886751345948129;              // (3 + sqrt(3)) / 6
+    static constexpr Real first_stage_weight = 1.2679491924311228; // 1 / gamma
+    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
+    static constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{1.2679491924311228, 0.0, 0.0, 0.0}},
+        {{1.2679491924311228, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.9282032302755092, 0.0, 0.0, 0.0}},
+        {{-0.4641016151377544, -0.4641016151377544, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
+    static constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+};
+
+template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduB> {
+    static constexpr int stages = 3;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::FirstStage;
+    static constexpr Real gamma = 0.7886751345948129;              // (3 + sqrt(3)) / 6
+    static constexpr Real first_stage_weight = 1.2679491924311228; // 1 / gamma
+    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
+    static constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{1.2679491924311228, 0.0, 0.0, 0.0}},
+        {{1.2679491924311228, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-0.5358983848622456, -0.7320508075688772, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
+    static constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+};
+
+template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduD> {
+    static constexpr int stages = 4;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::EmbeddedWeights;
+    static constexpr Real gamma = 0.5;
+    static constexpr Real first_stage_weight = 0.0;
+    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 1.0};
+    static constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{2.0, 0.0, 0.0, 0.0}},
+        {{2.0, 0.0, 0.0, 0.0}},
+        {{2.0, 0.0, 0.0, 0.0}},
+    }};
+    static constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-1.3333333333333333, 0.0, 0.0, 0.0}},
+        {{-3.3333333333333333, -2.0, 0.0, 0.0}},
+        {{-0.5, 0.0, 1.5, 0.0}},
+    }};
+    static constexpr std::array<Real, 4> m{2.0, 0.0, 0.0, 1.0};
+    static constexpr std::array<Real, 4> err{-0.6666666666666666, -1.0, -1.0, 1.3333333333333333};
 };
 
 } // namespace detail
 
-template<typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-         bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-         bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
-         bool StaticTolerances = false>
-class RODAS {
-public:
+template <typename Problem, detail::RosenbrockMethod Method = detail::RosenbrockMethod::ROS2S,
+          bool AnalyticJacobianOnly = false, bool CollectStats = true, bool AllowPivoting = true,
+          bool UsePrimordialGiftFactorization = false, bool ExternalMatrixStorage = false,
+          bool CompactRhsScratch = false, bool StaticTolerances = false>
+class RosenbrockIntegrator {
+  public:
     static constexpr size_type N = ProblemTraits<Problem>::neqs;
     static_assert(!AnalyticJacobianOnly || ProblemTraits<Problem>::has_analytic_jacobian,
                   "Analytic-only ROS2S requires Problem::jacobian");
     static_assert(!StaticTolerances || ProblemTraits<Problem>::has_ros2s_static_tolerances,
-                  "Static-tolerance ROS2S requires Problem::ros2s_rtol and Problem::ros2s_atol");
+                  "Static-tolerance ROS2S requires Problem::ros2s_rtol and "
+                  "Problem::ros2s_atol");
     static constexpr bool include_rhs_scratch =
         !(CompactRhsScratch && ProblemTraits<Problem>::rhs_allows_input_output_alias);
     using State = RODASState<N, AnalyticJacobianOnly, ExternalMatrixStorage, include_rhs_scratch,
                              StaticTolerances, CollectStats>;
     using ProblemState = typename ProblemTraits<Problem>::state_type;
 
-private:
-    static INTEGRATORS_HOST_DEVICE Real rtol_for(const State& s, size_type i) {
+  private:
+    static INTEGRATORS_HOST_DEVICE Real rtol_for(const State &s, size_type i) {
         if constexpr (StaticTolerances) {
             (void)s;
             return Problem::ros2s_rtol(i);
@@ -164,7 +233,7 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE Real atol_for(const State& s, size_type i) {
+    static INTEGRATORS_HOST_DEVICE Real atol_for(const State &s, size_type i) {
         if constexpr (StaticTolerances) {
             (void)s;
             return Problem::ros2s_atol(i);
@@ -173,8 +242,8 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void rhs(Real t, const std::array<Real, N>& y,
-                                            std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE void rhs(Real t, const std::array<Real, N> &y,
+                                            std::array<Real, N> &out) {
         Problem::rhs(t, y, out);
     }
 
@@ -182,7 +251,7 @@ private:
         return AnalyticJacobianOnly || ProblemTraits<Problem>::has_analytic_jacobian;
     }
 
-    static INTEGRATORS_HOST_DEVICE void eval_jacobian(State& s, Real x) {
+    static INTEGRATORS_HOST_DEVICE void eval_jacobian(State &s, Real x) {
         if constexpr (AnalyticJacobianOnly) {
             Problem::jacobian(x, s.y, s.matrix());
         } else if (s.jacobian_analytic && uses_analytic_jacobian()) {
@@ -206,9 +275,10 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE int decompose(State& s, Real fac) {
+    static INTEGRATORS_HOST_DEVICE int decompose(State &s, Real fac) {
         static_assert(!UsePrimordialGiftFactorization || N == 15,
-                      "GIFT factorization path is specialized for the primordial 15x15 system");
+                      "GIFT factorization path is specialized for the primordial "
+                      "15x15 system");
         for (size_type i = 0; i < N; ++i) {
             for (size_type j = 0; j < N; ++j) {
                 if constexpr (AnalyticJacobianOnly) {
@@ -233,7 +303,7 @@ private:
         return info;
     }
 
-    static INTEGRATORS_HOST_DEVICE void solve(State& s, std::array<Real, N>& ak) {
+    static INTEGRATORS_HOST_DEVICE void solve(State &s, std::array<Real, N> &ak) {
         if constexpr (UsePrimordialGiftFactorization) {
             linalg::primordial_gift_lu_solve<N>(s.matrix(), s.ip, ak);
         } else {
@@ -244,9 +314,73 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_error_stats(State& s, Real err, Real h,
-                                                           Real raw_fac, Real lower_fac,
-                                                           Real upper_fac) {
+    static INTEGRATORS_HOST_DEVICE std::array<Real, N> &stage_vector(State &s, int stage) {
+        switch (stage) {
+        case 0:
+            return s.ak1;
+        case 1:
+            return s.ak2;
+        case 2:
+            return s.ak3;
+        default:
+            return s.work;
+        }
+    }
+
+    template <typename C>
+    static INTEGRATORS_HOST_DEVICE void compute_stage(State &s, Real x, Real h, int stage) {
+        auto &ak = stage_vector(s, stage);
+        for (size_type i = 0; i < N; ++i) {
+            Real yi = s.y[i];
+            for (int j = 0; j < stage; ++j) {
+                yi += C::a[stage][j] * stage_vector(s, j)[i];
+            }
+            s.ynew[i] = yi;
+        }
+
+        auto &rhs_tmp = s.rhs_scratch(s.ynew);
+        rhs(x + C::alpha[stage] * h, s.ynew, rhs_tmp);
+        for (size_type i = 0; i < N; ++i) {
+            Real rhs_i = rhs_tmp[i];
+            for (int j = 0; j < stage; ++j) {
+                rhs_i += (C::c[stage][j] / h) * stage_vector(s, j)[i];
+            }
+            ak[i] = rhs_i;
+        }
+        solve(s, ak);
+    }
+
+    template <typename C> static INTEGRATORS_HOST_DEVICE void form_solution_and_error(State &s) {
+        for (size_type i = 0; i < N; ++i) {
+            Real solution_i = s.y[i];
+            for (int j = 0; j < C::stages; ++j) {
+                solution_i += C::m[j] * stage_vector(s, j)[i];
+            }
+
+            Real error_i = 0.0;
+            if constexpr (C::error_estimator == detail::RosenbrockErrorEstimator::FirstStage) {
+                error_i = solution_i - (s.y[i] + C::first_stage_weight * s.ak1[i]);
+            } else {
+                for (int j = 0; j < C::stages; ++j) {
+                    error_i += C::err[j] * stage_vector(s, j)[i];
+                }
+            }
+
+            s.ynew[i] = solution_i;
+            s.work[i] = error_i;
+        }
+    }
+
+    template <typename C> static INTEGRATORS_HOST_DEVICE Real controller_factor(Real err) {
+        if constexpr (C::error_estimator == detail::RosenbrockErrorEstimator::FirstStage) {
+            return std::sqrt(err);
+        } else {
+            return std::cbrt(err);
+        }
+    }
+
+    static INTEGRATORS_HOST_DEVICE void record_error_stats(State &s, Real err, Real h, Real raw_fac,
+                                                           Real lower_fac, Real upper_fac) {
         if constexpr (CollectStats) {
             s.last_error = err;
             s.min_error = std::min(s.min_error, err);
@@ -261,49 +395,50 @@ private:
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_rhs(State& s, int count = 1) {
+    static INTEGRATORS_HOST_DEVICE void record_rhs(State &s, int count = 1) {
         if constexpr (CollectStats) {
             s.n_rhs += count;
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_step(State& s, int n_step) {
+    static INTEGRATORS_HOST_DEVICE void record_step(State &s, int n_step) {
         if constexpr (CollectStats) {
             s.n_step = n_step;
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_accept(State& s, int n_accept) {
+    static INTEGRATORS_HOST_DEVICE void record_accept(State &s, int n_accept) {
         if constexpr (CollectStats) {
             s.n_accept = n_accept;
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE void record_reject(State& s) {
+    static INTEGRATORS_HOST_DEVICE void record_reject(State &s) {
         if constexpr (CollectStats) {
             s.n_reject += 1;
         }
     }
 
-    static INTEGRATORS_HOST_DEVICE Real error_norm(const State& s) {
+    static INTEGRATORS_HOST_DEVICE Real error_norm(const State &s) {
         Real err = 0.0;
         for (size_type i = 0; i < N; ++i) {
-            const Real sk = atol_for(s, i) + rtol_for(s, i) * std::max(std::abs(s.y[i]), std::abs(s.ynew[i]));
+            const Real sk =
+                atol_for(s, i) + rtol_for(s, i) * std::max(std::abs(s.y[i]), std::abs(s.ynew[i]));
             const Real term = s.work[i] / sk;
             err += term * term;
         }
         return std::sqrt(err / static_cast<Real>(N));
     }
 
-public:
-    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& problem_state, State& s) {
-        using C = detail::ROS2SCoefficients;
+  public:
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState &problem_state, State &s) {
+        using C = detail::RosenbrockCoefficients<Method>;
 
         if (s.tout == s.t) {
             return IntegratorResult::SUCCESS;
         }
-        if (!s.autonomous || s.safe <= 0.001 || s.safe >= 1.0 ||
-            s.fac_min <= 0.0 || s.fac_max < 1.0) {
+        if (!s.autonomous || s.safe <= 0.001 || s.safe >= 1.0 || s.fac_min <= 0.0 ||
+            s.fac_max < 1.0) {
             return IntegratorResult::BAD_INPUTS;
         }
         for (size_type i = 0; i < N; ++i) {
@@ -385,42 +520,16 @@ public:
                     continue;
                 }
 
-                rhs(x, s.y, s.ak1);
-                solve(s, s.ak1);
-
-                for (size_type i = 0; i < N; ++i) {
-                    s.ynew[i] = s.y[i] + C::a21 * s.ak1[i];
-                    s.ak2[i] = (C::c21 / h) * s.ak1[i];
+                for (int stage = 0; stage < C::stages; ++stage) {
+                    compute_stage<C>(s, x, h, stage);
                 }
-                auto& rhs_tmp = s.rhs_scratch(s.ynew);
-                rhs(x + C::ct2 * h, s.ynew, rhs_tmp);
-                for (size_type i = 0; i < N; ++i) {
-                    s.ak2[i] += rhs_tmp[i];
-                }
-                solve(s, s.ak2);
-
-                for (size_type i = 0; i < N; ++i) {
-                    s.ynew[i] = s.y[i] + C::a31 * s.ak1[i] + C::a32 * s.ak2[i];
-                    s.work[i] = (C::c31 * s.ak1[i] + C::c32 * s.ak2[i]) / h;
-                }
-                auto& rhs_tmp_stage3 = s.rhs_scratch(s.ynew);
-                rhs(x + h, s.ynew, rhs_tmp_stage3);
-                for (size_type i = 0; i < N; ++i) {
-                    s.work[i] += rhs_tmp_stage3[i];
-                }
-                solve(s, s.work);
-
-                for (size_type i = 0; i < N; ++i) {
-                    const Real ak3i = s.work[i];
-                    s.ynew[i] = s.y[i] + C::b1 * s.ak1[i] + C::b2 * s.ak2[i] + C::b3 * ak3i;
-                    s.work[i] = C::e1 * s.ak1[i] + C::e2 * s.ak2[i] + C::e3 * ak3i;
-                }
-                record_rhs(s, 3);
+                form_solution_and_error<C>(s);
+                record_rhs(s, C::stages);
                 n_step += 1;
                 record_step(s, n_step);
 
                 const Real err = error_norm(s);
-                const Real raw_fac = std::cbrt(err) / s.safe;
+                const Real raw_fac = controller_factor<C>(err) / s.safe;
                 const Real lower_fac = 1.0 / s.fac_max;
                 const Real upper_fac = 1.0 / s.fac_min;
                 record_error_stats(s, err, h, raw_fac, lower_fac, upper_fac);
@@ -431,11 +540,11 @@ public:
                     record_accept(s, n_accept);
                     if (s.predictive_controller) {
                         if (n_accept > 1) {
-                            const Real facgus = std::max(1.0 / s.fac_max,
+                            const Real facgus = std::max(
+                                1.0 / s.fac_max,
                                 std::min(1.0 / s.fac_min,
-                                         (hacc / h) *
-                                         std::cbrt((err * err) / erracc) /
-                                         s.safe));
+                                         (hacc / h) * controller_factor<C>((err * err) / erracc) /
+                                             s.safe));
                             hnew = h / std::max(fac_step, facgus);
                         }
                         hacc = h;
@@ -465,11 +574,50 @@ public:
     }
 };
 
-template<typename Problem>
-using ROS2S = RODAS<Problem>;
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using ROS2S = RosenbrockIntegrator<Problem, detail::RosenbrockMethod::ROS2S, AnalyticJacobianOnly,
+                                   CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                                   ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
 
-template<typename Problem>
-using ROS2SAnalytic = RODAS<Problem, true>;
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using RosenbrockSanduA =
+    RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduA, AnalyticJacobianOnly,
+                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using RosenbrockSanduB =
+    RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduB, AnalyticJacobianOnly,
+                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using RosenbrockSanduD =
+    RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduD, AnalyticJacobianOnly,
+                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using RODAS = ROS2S<Problem, AnalyticJacobianOnly, CollectStats, AllowPivoting,
+                    UsePrimordialGiftFactorization, ExternalMatrixStorage, CompactRhsScratch,
+                    StaticTolerances>;
+
+template <typename Problem> using ROS2SAnalytic = ROS2S<Problem, true>;
 
 } // namespace integrators
 

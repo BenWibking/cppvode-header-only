@@ -45,6 +45,11 @@ add_executable(test_ros2s test_ros2s.cpp)
 target_link_libraries(test_ros2s PRIVATE integrators)
 add_test(NAME ros2s_test COMMAND test_ros2s)
 
+# Sandu positivity-favorable Rosenbrock method regressions
+add_executable(test_rosenbrock_sandu test_rosenbrock_sandu.cpp)
+target_link_libraries(test_rosenbrock_sandu PRIVATE integrators)
+add_test(NAME rosenbrock_sandu_test COMMAND test_rosenbrock_sandu)
+
 # Linear invariants conservation with VODE
 add_executable(test_vode_linear_invariants test_vode_linear_invariants.cpp)
 target_link_libraries(test_vode_linear_invariants PRIVATE integrators)
