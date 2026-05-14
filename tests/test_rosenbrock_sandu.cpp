@@ -13,14 +13,24 @@ struct ScalarDecaySandu {
     using rhs_type = std::array<Real, neqs>;
     using jacobian_type = std::array<std::array<Real, neqs>, neqs>;
 
-    static void rhs(Real /*t*/, const state_type &y, rhs_type &dydt) { dydt[0] = -10.0 * y[0]; }
+    inline static int rhs_calls = 0;
+    inline static int jacobian_calls = 0;
+
+    static void rhs(Real /*t*/, const state_type &y, rhs_type &dydt) {
+        rhs_calls += 1;
+        dydt[0] = -10.0 * y[0];
+    }
 
     static void jacobian(Real /*t*/, const state_type & /*y*/, jacobian_type &jac) {
+        jacobian_calls += 1;
         jac[0][0] = -10.0;
     }
 };
 
-template <typename Integrator> bool check_one_step(Real h, Real expected, const char *name) {
+template <typename Integrator>
+bool check_one_step(Real h, Real expected, const char *name, int expected_rhs_calls) {
+    ScalarDecaySandu::rhs_calls = 0;
+    ScalarDecaySandu::jacobian_calls = 0;
     auto integrator = Integrator{};
     auto state = RODASState<1>{};
     state.jacobian_analytic = true;
@@ -40,6 +50,18 @@ template <typename Integrator> bool check_one_step(Real h, Real expected, const 
     }
     if (state.n_accept != 1) {
         std::cerr << name << " did not take exactly one accepted step\n";
+        return false;
+    }
+    if (state.n_rhs != expected_rhs_calls ||
+        ScalarDecaySandu::rhs_calls != expected_rhs_calls) {
+        std::cerr << name << " RHS count mismatch: stats=" << state.n_rhs
+                  << " actual=" << ScalarDecaySandu::rhs_calls
+                  << " expected=" << expected_rhs_calls << "\n";
+        return false;
+    }
+    if (state.n_jac != 1 || ScalarDecaySandu::jacobian_calls != 1) {
+        std::cerr << name << " Jacobian count mismatch: stats=" << state.n_jac
+                  << " actual=" << ScalarDecaySandu::jacobian_calls << "\n";
         return false;
     }
     const Real err = std::abs(state.y[0] - expected);
@@ -65,15 +87,15 @@ int main() {
     constexpr Real z = -1.0;
 
     if (!check_one_step<RosenbrockSanduA<ScalarDecaySandu>>(h, method_ab_transfer(z),
-                                                            "RosenbrockSanduA")) {
+                                                            "RosenbrockSanduA", 2)) {
         return 1;
     }
     if (!check_one_step<RosenbrockSanduB<ScalarDecaySandu>>(h, method_ab_transfer(z),
-                                                            "RosenbrockSanduB")) {
+                                                            "RosenbrockSanduB", 2)) {
         return 1;
     }
     if (!check_one_step<RosenbrockSanduD<ScalarDecaySandu>>(h, method_d_transfer(z),
-                                                            "RosenbrockSanduD")) {
+                                                            "RosenbrockSanduD", 2)) {
         return 1;
     }
 

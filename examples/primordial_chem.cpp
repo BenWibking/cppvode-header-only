@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #if defined(__CUDACC__)
@@ -156,7 +157,10 @@ PRIMORDIAL_CHEM_PROBE_HOST_DEVICE integrators::Real active_atol_enuc() {
 
 enum class IntegratorChoice {
     VODE,
-    ROS2S
+    ROS2S,
+    ROSENBROCK_SANDU_A,
+    ROSENBROCK_SANDU_B,
+    ROSENBROCK_SANDU_D
 };
 
 constexpr std::array<integrators::Real, pc::NumSpec> initial_number_densities{
@@ -205,6 +209,11 @@ struct IntegratorWorkStats {
     std::uint64_t error_failures{};
 };
 
+struct NonpositivityStats {
+    std::array<std::uint64_t, pc::neqs> cumulative{};
+    std::array<std::uint64_t, pc::neqs> last_step{};
+};
+
 struct PrimordialChemRos2sStaticTolerances : pc::PrimordialChem {
     INTEGRATORS_HOST_DEVICE static constexpr integrators::Real ros2s_rtol(integrators::size_type i) {
         return i == pc::NumSpec ? rtol_enuc : rtol_spec;
@@ -226,6 +235,7 @@ struct CollapseState {
     integrators::Real density_driver{};
     int completed_steps{};
     IntegratorWorkStats integrator_work{};
+    NonpositivityStats nonpositivity{};
 };
 
 struct CollapseStepResult {
@@ -241,6 +251,7 @@ struct Diagnostics {
     bool dump_history{};
     bool dump_final_state{};
     bool integrator_stats{};
+    bool positivity_report{};
     int trace_cell_id{-1};
     int trace_step{-1};
 };
@@ -473,8 +484,14 @@ constexpr std::string_view integrator_name(IntegratorChoice choice) {
     case IntegratorChoice::VODE:
         return "VODE";
     case IntegratorChoice::ROS2S:
-    default:
         return "ROS2S";
+    case IntegratorChoice::ROSENBROCK_SANDU_A:
+        return "RosenbrockSanduA";
+    case IntegratorChoice::ROSENBROCK_SANDU_B:
+        return "RosenbrockSanduB";
+    case IntegratorChoice::ROSENBROCK_SANDU_D:
+    default:
+        return "RosenbrockSanduD";
     }
 }
 
@@ -577,7 +594,7 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_vode(pc::burn_t&
     return result;
 }
 
-template<bool FiniteDifferenceJacobian, bool CollectStats>
+template<IntegratorChoice Choice, bool FiniteDifferenceJacobian, bool CollectStats>
 INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t& state, integrators::Real dt,
                                                                        IntegratorWorkStats* stats,
                                                                        RODASMatrix* external_matrix) {
@@ -587,11 +604,30 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t
         !FiniteDifferenceJacobian && compact_ros2s_analytic_jacobian;
     constexpr bool external_matrix_storage =
         !FiniteDifferenceJacobian && ros2s_external_matrix;
-    auto integrator =
-        integrators::RODAS<Ros2sProblem, analytic_jacobian_only, CollectStats,
-                           ros2s_allow_pivoting, ros2s_gift_factorization,
-                           external_matrix_storage, ros2s_compact_rhs_scratch,
-                           ros2s_static_tolerances>{};
+    using Integrator =
+        std::conditional_t<Choice == IntegratorChoice::ROS2S,
+                           integrators::RODAS<Ros2sProblem, analytic_jacobian_only, CollectStats,
+                                              ros2s_allow_pivoting, ros2s_gift_factorization,
+                                              external_matrix_storage, ros2s_compact_rhs_scratch,
+                                              ros2s_static_tolerances>,
+        std::conditional_t<Choice == IntegratorChoice::ROSENBROCK_SANDU_A,
+                           integrators::RosenbrockSanduA<
+                               Ros2sProblem, analytic_jacobian_only, CollectStats,
+                               ros2s_allow_pivoting, ros2s_gift_factorization,
+                               external_matrix_storage, ros2s_compact_rhs_scratch,
+                               ros2s_static_tolerances>,
+        std::conditional_t<Choice == IntegratorChoice::ROSENBROCK_SANDU_B,
+                           integrators::RosenbrockSanduB<
+                               Ros2sProblem, analytic_jacobian_only, CollectStats,
+                               ros2s_allow_pivoting, ros2s_gift_factorization,
+                               external_matrix_storage, ros2s_compact_rhs_scratch,
+                               ros2s_static_tolerances>,
+                           integrators::RosenbrockSanduD<
+                               Ros2sProblem, analytic_jacobian_only, CollectStats,
+                               ros2s_allow_pivoting, ros2s_gift_factorization,
+                               external_matrix_storage, ros2s_compact_rhs_scratch,
+                               ros2s_static_tolerances>>>>;
+    auto integrator = Integrator{};
     auto ros2s_state =
         typename decltype(integrator)::State{};
     if constexpr (external_matrix_storage) {
@@ -640,18 +676,56 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t
 
 INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn_once_ros2s(pc::burn_t& state, integrators::Real dt,
                                                                        bool finite_difference_jacobian,
+                                                                       IntegratorChoice integrator_choice,
                                                                        IntegratorWorkStats* stats,
                                                                        RODASMatrix* external_matrix) {
-    if (finite_difference_jacobian) {
-        if (stats != nullptr) {
-            return burn_once_ros2s<true, true>(state, dt, stats, external_matrix);
+    switch (integrator_choice) {
+    case IntegratorChoice::ROS2S:
+        if (finite_difference_jacobian) {
+            if (stats != nullptr) {
+                return burn_once_ros2s<IntegratorChoice::ROS2S, true, true>(state, dt, stats, external_matrix);
+            }
+            return burn_once_ros2s<IntegratorChoice::ROS2S, true, false>(state, dt, stats, external_matrix);
         }
-        return burn_once_ros2s<true, false>(state, dt, stats, external_matrix);
+        if (stats != nullptr) {
+            return burn_once_ros2s<IntegratorChoice::ROS2S, false, true>(state, dt, stats, external_matrix);
+        }
+        return burn_once_ros2s<IntegratorChoice::ROS2S, false, false>(state, dt, stats, external_matrix);
+    case IntegratorChoice::ROSENBROCK_SANDU_A:
+        if (finite_difference_jacobian) {
+            if (stats != nullptr) {
+                return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_A, true, true>(state, dt, stats, external_matrix);
+            }
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_A, true, false>(state, dt, stats, external_matrix);
+        }
+        if (stats != nullptr) {
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_A, false, true>(state, dt, stats, external_matrix);
+        }
+        return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_A, false, false>(state, dt, stats, external_matrix);
+    case IntegratorChoice::ROSENBROCK_SANDU_B:
+        if (finite_difference_jacobian) {
+            if (stats != nullptr) {
+                return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_B, true, true>(state, dt, stats, external_matrix);
+            }
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_B, true, false>(state, dt, stats, external_matrix);
+        }
+        if (stats != nullptr) {
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_B, false, true>(state, dt, stats, external_matrix);
+        }
+        return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_B, false, false>(state, dt, stats, external_matrix);
+    case IntegratorChoice::ROSENBROCK_SANDU_D:
+    default:
+        if (finite_difference_jacobian) {
+            if (stats != nullptr) {
+                return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_D, true, true>(state, dt, stats, external_matrix);
+            }
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_D, true, false>(state, dt, stats, external_matrix);
+        }
+        if (stats != nullptr) {
+            return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_D, false, true>(state, dt, stats, external_matrix);
+        }
+        return burn_once_ros2s<IntegratorChoice::ROSENBROCK_SANDU_D, false, false>(state, dt, stats, external_matrix);
     }
-    if (stats != nullptr) {
-        return burn_once_ros2s<false, true>(state, dt, stats, external_matrix);
-    }
-    return burn_once_ros2s<false, false>(state, dt, stats, external_matrix);
 }
 
 INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, integrators::Real dt,
@@ -666,7 +740,7 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, in
         return burn_once_vode(state, dt, finite_difference_jacobian, trace_vode, stats);
     case IntegratorChoice::ROS2S:
     default:
-        return burn_once_ros2s(state, dt, finite_difference_jacobian, stats, external_matrix);
+        return burn_once_ros2s(state, dt, finite_difference_jacobian, integrator_choice, stats, external_matrix);
     }
 }
 
@@ -678,9 +752,12 @@ INTEGRATORS_HOST_DEVICE integrators::IntegratorResult burn(pc::burn_t& state, in
     if constexpr (Choice == IntegratorChoice::VODE) {
         (void)external_matrix;
         return burn_once_vode(state, dt, FiniteDifferenceJacobian, trace_vode, stats);
-    } else if constexpr (Choice == IntegratorChoice::ROS2S) {
+    } else if constexpr (Choice == IntegratorChoice::ROS2S ||
+                         Choice == IntegratorChoice::ROSENBROCK_SANDU_A ||
+                         Choice == IntegratorChoice::ROSENBROCK_SANDU_B ||
+                         Choice == IntegratorChoice::ROSENBROCK_SANDU_D) {
         (void)trace_vode;
-        return burn_once_ros2s<FiniteDifferenceJacobian, CollectStats>(
+        return burn_once_ros2s<Choice, FiniteDifferenceJacobian, CollectStats>(
             state, dt, stats, external_matrix);
     }
 }
@@ -749,6 +826,22 @@ PRIMORDIAL_CHEM_PROBE_HOST_DEVICE void add_integrator_work(IntegratorWorkStats& 
     total.error_failures += step.error_failures;
 }
 
+INTEGRATORS_HOST_DEVICE void record_nonpositivity(CollapseState& collapse) {
+    collapse.nonpositivity.last_step.fill(0);
+    for (int n = 0; n < pc::NumSpec; ++n) {
+        const auto value = collapse.state.xn[static_cast<std::size_t>(n)];
+        if (!std::isfinite(value) || value <= 0.0) {
+            collapse.nonpositivity.last_step[static_cast<std::size_t>(n)] += 1;
+            collapse.nonpositivity.cumulative[static_cast<std::size_t>(n)] += 1;
+        }
+    }
+    const auto energy = collapse.state.e;
+    if (!std::isfinite(energy) || energy <= 0.0) {
+        collapse.nonpositivity.last_step[pc::NumSpec] += 1;
+        collapse.nonpositivity.cumulative[pc::NumSpec] += 1;
+    }
+}
+
 INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& collapse, int step, int cell,
                                                                  bool perturb_cells,
                                                                  bool finite_difference_jacobian,
@@ -804,6 +897,9 @@ INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& 
     }
     if (result != integrators::IntegratorResult::SUCCESS) {
         return {true, step, result};
+    }
+    if (diagnostics.positivity_report) {
+        record_nonpositivity(collapse);
     }
 
     pc::floor_and_normalize_number_densities(collapse.state);
@@ -877,6 +973,9 @@ INTEGRATORS_HOST_DEVICE CollapseStepResult advance_collapse_step(CollapseState& 
     if (result != integrators::IntegratorResult::SUCCESS) {
         return {true, step, result};
     }
+    if (diagnostics.positivity_report) {
+        record_nonpositivity(collapse);
+    }
 
     pc::floor_and_normalize_number_densities(collapse.state);
     pc::balance_charge(collapse.state);
@@ -917,7 +1016,7 @@ void collapse_step_kernel(CollapseState* cells,
     }
 
     RODASMatrix* external_matrix = nullptr;
-    if constexpr (Choice == IntegratorChoice::ROS2S && !FiniteDifferenceJacobian &&
+    if constexpr (Choice != IntegratorChoice::VODE && !FiniteDifferenceJacobian &&
                   ros2s_external_matrix) {
         external_matrix = &ros2s_matrices[cell];
     } else {
@@ -983,10 +1082,11 @@ bool parse_positive_real(const char* text, integrators::Real& value) {
 
 void print_usage(const char* program) {
     std::cerr << "usage: " << program
-              << " [--grid N] [--integrator vode|ros2s] [--perturb] [--fd-jacobian]"
+              << " [--grid N] [--integrator vode|ros2s|sandu-a|sandu-b|sandu-d] [--perturb] [--fd-jacobian]"
               << " [--cell-id N] [--trace-vode] [--trace-step N] [--trace-cell-id N]"
               << " [--probe-deuterium-terms] [--dump-history] [--dump-final-state] [--integrator-stats]"
-              << " [--threads-per-block N] [--rtol X] [--atol X]\n";
+              << " [--positivity-report]"
+              << " [--threads-per-block N] [--rtol X] [--atol X] [--energy-atol X]\n";
 }
 
 bool parse_integrator(std::string_view text, IntegratorChoice& integrator_choice) {
@@ -996,6 +1096,18 @@ bool parse_integrator(std::string_view text, IntegratorChoice& integrator_choice
     }
     if (text == "ros2s" || text == "rodas") {
         integrator_choice = IntegratorChoice::ROS2S;
+        return true;
+    }
+    if (text == "sandu-a" || text == "rosenbrock-sandu-a") {
+        integrator_choice = IntegratorChoice::ROSENBROCK_SANDU_A;
+        return true;
+    }
+    if (text == "sandu-b" || text == "rosenbrock-sandu-b") {
+        integrator_choice = IntegratorChoice::ROSENBROCK_SANDU_B;
+        return true;
+    }
+    if (text == "sandu-d" || text == "rosenbrock-sandu-d") {
+        integrator_choice = IntegratorChoice::ROSENBROCK_SANDU_D;
         return true;
     }
     return false;
@@ -1070,6 +1182,10 @@ bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrat
             diagnostics.integrator_stats = true;
             continue;
         }
+        if (arg == "--positivity-report") {
+            diagnostics.positivity_report = true;
+            continue;
+        }
         if (arg == "--threads-per-block") {
             if (i + 1 >= argc || !parse_positive_int(argv[++i], threads_per_block)) {
                 print_usage(argv[0]);
@@ -1094,6 +1210,15 @@ bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrat
                 return false;
             }
             runtime_tolerances.atol_spec_value = parsed;
+            runtime_tolerances.atol_enuc_value = parsed;
+            continue;
+        }
+        if (arg == "--energy-atol") {
+            integrators::Real parsed = 0.0;
+            if (i + 1 >= argc || !parse_positive_real(argv[++i], parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
             runtime_tolerances.atol_enuc_value = parsed;
             continue;
         }
@@ -1162,6 +1287,16 @@ bool parse_args(int argc, char** argv, int& grid_dim, IntegratorChoice& integrat
                 return false;
             }
             runtime_tolerances.atol_spec_value = parsed;
+            runtime_tolerances.atol_enuc_value = parsed;
+            continue;
+        }
+        constexpr std::string_view energy_atol_prefix = "--energy-atol=";
+        if (arg.rfind(energy_atol_prefix, 0) == 0) {
+            integrators::Real parsed = 0.0;
+            if (!parse_positive_real(argv[i] + energy_atol_prefix.size(), parsed)) {
+                print_usage(argv[0]);
+                return false;
+            }
             runtime_tolerances.atol_enuc_value = parsed;
             continue;
         }
@@ -1288,6 +1423,37 @@ void print_history_row(int step, const CollapseState& cell, const CollapseStepRe
         std::cout << "," << cell.state.xn[static_cast<std::size_t>(n)];
     }
     std::cout << "\n";
+}
+
+std::string_view positivity_component_name(int component) {
+    if (component == pc::NumSpec) {
+        return "Eint";
+    }
+    return pc::short_spec_names[static_cast<std::size_t>(component)];
+}
+
+void print_positivity_header() {
+    std::cout << "positivity_csv_begin\n";
+    std::cout << "method,step,component,nonpositive_count,cumulative_count\n";
+}
+
+void print_positivity_rows(IntegratorChoice integrator_choice, int step, const CollapseState& cell) {
+    for (int component = 0; component < pc::neqs; ++component) {
+        const auto count = cell.nonpositivity.last_step[static_cast<std::size_t>(component)];
+        const auto cumulative = cell.nonpositivity.cumulative[static_cast<std::size_t>(component)];
+        if (count == 0 && cumulative == 0) {
+            continue;
+        }
+        std::cout << integrator_name(integrator_choice) << ","
+                  << step << ","
+                  << positivity_component_name(component) << ","
+                  << count << ","
+                  << cumulative << "\n";
+    }
+}
+
+void print_positivity_footer() {
+    std::cout << "positivity_csv_end\n";
 }
 
 bool checked_cell_count(int grid_dim, int& num_cells) {
@@ -1474,6 +1640,9 @@ int main(int argc, char** argv) {
     if (diagnostics.dump_history) {
         print_history_header();
     }
+    if (diagnostics.positivity_report) {
+        print_positivity_header();
+    }
     const auto collapse_loop_start = std::chrono::steady_clock::now();
     for (int n = 0; n < nsteps; ++n) {
         const auto step_kernel_start = std::chrono::steady_clock::now();
@@ -1495,8 +1664,23 @@ int main(int argc, char** argv) {
                     cell_id_offset, perturb_cells, diagnostics);
                 break;
             case IntegratorChoice::ROS2S:
-            default:
                 collapse_step_kernel<IntegratorChoice::ROS2S, false, false><<<blocks, threads_per_block>>>(
+                    device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                    cell_id_offset, perturb_cells, diagnostics);
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_A:
+                collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, false, false><<<blocks, threads_per_block>>>(
+                    device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                    cell_id_offset, perturb_cells, diagnostics);
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_B:
+                collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, false, false><<<blocks, threads_per_block>>>(
+                    device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                    cell_id_offset, perturb_cells, diagnostics);
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_D:
+            default:
+                collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, false, false><<<blocks, threads_per_block>>>(
                     device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
                     cell_id_offset, perturb_cells, diagnostics);
                 break;
@@ -1515,7 +1699,6 @@ int main(int argc, char** argv) {
                 }
                 break;
             case IntegratorChoice::ROS2S:
-            default:
                 if (finite_difference_jacobian) {
                     if constexpr (specialize_ros2s_stats) {
                         if (diagnostics.integrator_stats) {
@@ -1545,6 +1728,112 @@ int main(int argc, char** argv) {
                         }
                     } else {
                         collapse_step_kernel<IntegratorChoice::ROS2S, false, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                }
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_A:
+                if (finite_difference_jacobian) {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, true, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, true, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, true, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                } else {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, false, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, false, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_A, false, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                }
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_B:
+                if (finite_difference_jacobian) {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, true, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, true, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, true, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                } else {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, false, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, false, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_B, false, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                }
+                break;
+            case IntegratorChoice::ROSENBROCK_SANDU_D:
+            default:
+                if (finite_difference_jacobian) {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, true, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, true, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, true, true><<<blocks, threads_per_block>>>(
+                            device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                            cell_id_offset, perturb_cells, diagnostics);
+                    }
+                } else {
+                    if constexpr (specialize_ros2s_stats) {
+                        if (diagnostics.integrator_stats) {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, false, true><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        } else {
+                            collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, false, false><<<blocks, threads_per_block>>>(
+                                device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
+                                cell_id_offset, perturb_cells, diagnostics);
+                        }
+                    } else {
+                        collapse_step_kernel<IntegratorChoice::ROSENBROCK_SANDU_D, false, true><<<blocks, threads_per_block>>>(
                             device_cells, device_cell_results, device_ros2s_matrices, n, num_cells,
                             cell_id_offset, perturb_cells, diagnostics);
                     }
@@ -1676,6 +1965,9 @@ int main(int argc, char** argv) {
     if (diagnostics.dump_history) {
         print_history_header();
     }
+    if (diagnostics.positivity_report) {
+        print_positivity_header();
+    }
     const auto collapse_loop_start = std::chrono::steady_clock::now();
     for (int n = 0; n < nsteps; ++n) {
         for (std::size_t cell = 0; cell < host_cells.size(); ++cell) {
@@ -1696,10 +1988,18 @@ int main(int argc, char** argv) {
         if (batch_status.failed_cell >= 0 || batch_status.failed_step.stop) {
             break;
         }
+        if (diagnostics.positivity_report) {
+            for (const auto& cell : host_cells) {
+                print_positivity_rows(integrator_choice, n, cell);
+            }
+        }
     }
     const auto collapse_loop_end = std::chrono::steady_clock::now();
     collapse_loop_walltime_sec =
         std::chrono::duration<double>(collapse_loop_end - collapse_loop_start).count();
+    if (diagnostics.positivity_report) {
+        print_positivity_footer();
+    }
 
     std::cout << "integration backend: CPU serialized cells\n";
 #endif
