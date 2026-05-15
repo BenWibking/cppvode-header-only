@@ -13,11 +13,13 @@ specialization, and active kernel instantiations only.
 Relevant build options:
 
 ```text
--DPRIMORDIAL_CHEM_ROS2S_COMPACT_RHS_SCRATCH=1
 -DPRIMORDIAL_CHEM_ROS2S_STATIC_TOLERANCES=1
 -DPRIMORDIAL_CHEM_ROS2S_SPECIALIZE_STATS=1
 -DPRIMORDIAL_CHEM_ACTIVE_KERNELS_ONLY=1
 ```
+
+Compact RHS scratch is now always selected when a problem declares that its RHS
+supports input/output aliasing.
 
 In this configuration, the resource usage was:
 
@@ -55,7 +57,7 @@ again.
 The useful optimizations were the ones that reduced per-thread state or removed
 inactive code paths without increasing stack pressure:
 
-- Specializing the RODAS implementation completely to ROS2S.
+- Specializing the Rosenbrock implementation completely to ROS2S.
 - Removing RODAS4 support from the active path.
 - Specializing stats collection so the no-stats ROS2S kernel does not carry
   stats fields.
@@ -70,17 +72,18 @@ inactive code paths without increasing stack pressure:
 
 ## Experiments That Did Not Help
 
-### Sparse GIFT Factorization
+### Sparse Factorization Prototype
 
-A symbolic sparse factorization ordering was implemented to exploit the Jacobian
-sparsity. It minimized fill reasonably well, but the generated factorization was
-much worse for GPU performance.
+A symbolic sparse factorization ordering was implemented to exploit the
+Jacobian sparsity. It minimized fill reasonably well, but the generated
+factorization was much worse for GPU performance. The implementation has since
+been removed.
 
 Representative result:
 
 ```text
-32^3: VODE ~6.38 s, ROS2S GIFT ~34.26 s
-ROS2S GIFT stack: ~7936 bytes
+32^3: VODE ~6.38 s, ROS2S sparse factorization ~34.26 s
+ROS2S sparse factorization stack: ~7936 bytes
 ```
 
 The sparse path increased stack pressure and introduced too much scalar
@@ -90,7 +93,7 @@ currently better on GPU.
 ### External Matrix Storage
 
 Moving the ROS2S matrix out of the per-thread state reduced stack size, but it
-forced far more global-memory traffic.
+forced far more global-memory traffic. The option has since been removed.
 
 Representative result:
 
@@ -104,7 +107,8 @@ hot per-thread data to global memory was much worse.
 
 ### No-Pivot Factorization
 
-Disabling pivoting did not produce a valid or faster result.
+Disabling pivoting did not produce a valid or faster result. The ROS2S
+no-pivot option has since been removed.
 
 Representative result:
 
@@ -170,7 +174,8 @@ than the current dense pivoted single-kernel ROS2S path:
 
 - Do not split ROS2S into multiple kernels.
 - Do not move hot per-thread matrix storage to global memory.
-- Do not use the GIFT sparse factorization path for this benchmark.
+- Do not reintroduce the removed sparse factorization prototype for this
+  benchmark.
 - Do not disable pivoting for primordial chemistry.
 - Do not remove `ynew` solely to reduce stack.
 - Do not pursue broad `--maxrregcount` caps unless a very narrow cap is tested
@@ -187,10 +192,10 @@ resource usage is plausible.
 
 ### Reduce ROS2S Live Ranges
 
-Inspect `RODAS::step`, `decompose`, `solve`, Jacobian assembly, and error-control
-code for values that stay live across calls or loops unnecessarily. This is the
-most plausible path because stack/register pressure has been the strongest
-predictor of performance.
+Inspect the ROS2S step, `decompose`, `solve`, Jacobian assembly, and
+error-control code for values that stay live across calls or loops
+unnecessarily. This is the most plausible path because stack/register pressure
+has been the strongest predictor of performance.
 
 - Inspect long live ranges in the ROS2S step and try to shorten them without
   removing useful storage that improves scheduling.
@@ -207,8 +212,7 @@ Keep the dense pivoted LU algorithm, but look for ways to reduce temporary array
 and lifetime overlap in the matrix factorization and solve path.
 
 - Preserve pivoting and the dense representation.
-- Avoid sparse/GIFT/no-pivot variants; those have already failed for this
-  problem.
+- Avoid sparse/no-pivot variants; those have already failed for this problem.
 - Avoid moving hot per-thread data to global memory.
 
 ### Specialize Remaining Runtime Constants

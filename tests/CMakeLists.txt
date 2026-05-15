@@ -35,7 +35,7 @@ add_executable(test_vode_robertson_strict test_vode_robertson_strict.cpp)
 target_link_libraries(test_vode_robertson_strict PRIVATE integrators)
 add_test(NAME vode_robertson_strict_test COMMAND test_vode_robertson_strict)
 
-# RODAS Robertson regression
+# ROS2S Robertson regression
 add_executable(test_rodas_robertson test_rodas_robertson.cpp)
 target_link_libraries(test_rodas_robertson PRIVATE integrators)
 add_test(NAME rodas_robertson_test COMMAND test_rodas_robertson)

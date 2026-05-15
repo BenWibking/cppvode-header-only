@@ -31,18 +31,6 @@ template <size_type N> struct RODASRhsScratchStorage<N, false> {
     }
 };
 
-template <size_type N, bool ExternalMatrixStorage> struct RODASMatrixStorage {
-    std::array<std::array<Real, N>, N> e{};
-
-    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N> &matrix() { return e; }
-};
-
-template <size_type N> struct RODASMatrixStorage<N, true> {
-    std::array<std::array<Real, N>, N> *external_e{nullptr};
-
-    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N> &matrix() { return *external_e; }
-};
-
 template <size_type N, bool StaticTolerances> struct RODASToleranceStorage {
     Real rtol{1.e-6};
     Real atol{1.e-12};
@@ -73,12 +61,11 @@ template <bool CollectStats> struct RODASStatsStorage {
 
 template <> struct RODASStatsStorage<false> {};
 
-template <size_type N, bool AnalyticJacobianOnly = false, bool ExternalMatrixStorage = false,
-          bool IncludeRhsScratch = true, bool StaticTolerances = false, bool CollectStats = true>
+template <size_type N, bool AnalyticJacobianOnly = false, bool IncludeRhsScratch = true,
+          bool StaticTolerances = false, bool CollectStats = true>
 struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
                     public RODASStatsStorage<CollectStats>,
                     public RODASJacobianStorage<N, AnalyticJacobianOnly>,
-                    public RODASMatrixStorage<N, ExternalMatrixStorage>,
                     public RODASRhsScratchStorage<N, IncludeRhsScratch> {
     Real t{0.0};
     Real tout{0.0};
@@ -103,6 +90,9 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
     std::array<Real, N> rhs_reuse{};
     std::array<Real, N> work{};
     std::array<int, N> ip{};
+    std::array<std::array<Real, N>, N> e{};
+
+    INTEGRATORS_HOST_DEVICE std::array<std::array<Real, N>, N> &matrix() { return e; }
 };
 
 namespace detail {
@@ -446,9 +436,8 @@ template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduD> {
 } // namespace detail
 
 template <typename Problem, detail::RosenbrockMethod Method = detail::RosenbrockMethod::ROS2S,
-          bool AnalyticJacobianOnly = false, bool CollectStats = true, bool AllowPivoting = true,
-          bool UsePrimordialGiftFactorization = false, bool ExternalMatrixStorage = false,
-          bool CompactRhsScratch = false, bool StaticTolerances = false>
+          bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool StaticTolerances = false>
 class RosenbrockIntegrator {
   public:
     static constexpr size_type N = ProblemTraits<Problem>::neqs;
@@ -458,9 +447,9 @@ class RosenbrockIntegrator {
                   "Static-tolerance ROS2S requires Problem::ros2s_rtol and "
                   "Problem::ros2s_atol");
     static constexpr bool include_rhs_scratch =
-        !(CompactRhsScratch && ProblemTraits<Problem>::rhs_allows_input_output_alias);
-    using State = RODASState<N, AnalyticJacobianOnly, ExternalMatrixStorage, include_rhs_scratch,
-                             StaticTolerances, CollectStats>;
+        !ProblemTraits<Problem>::rhs_allows_input_output_alias;
+    using State =
+        RODASState<N, AnalyticJacobianOnly, include_rhs_scratch, StaticTolerances, CollectStats>;
     using ProblemState = typename ProblemTraits<Problem>::state_type;
 
   private:
@@ -516,9 +505,6 @@ class RosenbrockIntegrator {
     }
 
     static INTEGRATORS_HOST_DEVICE int decompose(State &s, Real fac) {
-        static_assert(!UsePrimordialGiftFactorization || N == 15,
-                      "GIFT factorization path is specialized for the primordial "
-                      "15x15 system");
         for (size_type i = 0; i < N; ++i) {
             for (size_type j = 0; j < N; ++j) {
                 if constexpr (AnalyticJacobianOnly) {
@@ -529,12 +515,7 @@ class RosenbrockIntegrator {
             }
             s.matrix()[i][i] += fac;
         }
-        int info = 0;
-        if constexpr (UsePrimordialGiftFactorization) {
-            info = linalg::primordial_gift_lu_decomposition<N>(s.matrix(), s.ip);
-        } else {
-            info = linalg::lu_decomposition<N, AllowPivoting>(s.matrix(), s.ip);
-        }
+        const int info = linalg::lu_decomposition<N, true>(s.matrix(), s.ip);
         if constexpr (CollectStats) {
             if (info == 0) {
                 s.n_decomp += 1;
@@ -544,11 +525,7 @@ class RosenbrockIntegrator {
     }
 
     static INTEGRATORS_HOST_DEVICE void solve(State &s, std::array<Real, N> &ak) {
-        if constexpr (UsePrimordialGiftFactorization) {
-            linalg::primordial_gift_lu_solve<N>(s.matrix(), s.ip, ak);
-        } else {
-            linalg::lu_solve<N, AllowPivoting>(s.matrix(), s.ip, ak);
-        }
+        linalg::lu_solve<N, true>(s.matrix(), s.ip, ak);
         if constexpr (CollectStats) {
             s.n_solve += 1;
         }
@@ -864,64 +841,38 @@ class RosenbrockIntegrator {
 };
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using ROS2S = RosenbrockIntegrator<Problem, detail::RosenbrockMethod::ROS2S, AnalyticJacobianOnly,
-                                   CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                                   ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+                                   CollectStats, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using Ros2 = RosenbrockIntegrator<Problem, detail::RosenbrockMethod::Ros2, AnalyticJacobianOnly,
-                                  CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                                  ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+                                  CollectStats, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using RosenbrockSanduA =
     RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduA, AnalyticJacobianOnly,
-                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+                         CollectStats, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using RosenbrockSanduB =
     RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduB, AnalyticJacobianOnly,
-                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+                         CollectStats, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using RosenbrockSanduC =
     RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduC, AnalyticJacobianOnly,
-                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+                         CollectStats, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
           bool StaticTolerances = false>
 using RosenbrockSanduD =
     RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduD, AnalyticJacobianOnly,
-                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
-                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
-
-template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
-          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
-          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
-          bool StaticTolerances = false>
-using RODAS = ROS2S<Problem, AnalyticJacobianOnly, CollectStats, AllowPivoting,
-                    UsePrimordialGiftFactorization, ExternalMatrixStorage, CompactRhsScratch,
-                    StaticTolerances>;
+                         CollectStats, StaticTolerances>;
 
 template <typename Problem> using ROS2SAnalytic = ROS2S<Problem, true>;
 

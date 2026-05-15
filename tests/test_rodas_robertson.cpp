@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// ABOUTME: RODAS regression test on the stiff Robertson problem
+// ABOUTME: ROS2S regression test on the stiff Robertson problem
 #include <array>
 #include <cmath>
 #include <iomanip>
@@ -40,7 +40,7 @@ struct RobertsonRODAS {
 };
 
 int main() {
-    auto integrator = RODAS<RobertsonRODAS>{};
+    auto integrator = ROS2S<RobertsonRODAS>{};
     auto state = RODASState<3>{};
     state.jacobian_analytic = true;
     state.autonomous = true;

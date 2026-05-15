@@ -5,7 +5,6 @@
 #include <cassert>
 #include <cmath>
 #include <integrators/linear_algebra.hpp>
-#include <integrators/primordial_chem.hpp>
 
 using namespace integrators;
 
@@ -111,71 +110,6 @@ void test_factor_solve() {
     std::cout << "  One-shot LU factor/solve: PASSED\n";
 }
 
-void test_primordial_gift_factor_solve() {
-    std::cout << "Testing primordial GIFT sparse factor/solve...\n";
-
-    using Problem = primordial_chem::PrimordialChem;
-    constexpr size_type N = Problem::neqs;
-
-    Problem::state_type y{};
-    y[0] = 2.0e4;
-    y[1] = 2.0e4;
-    y[2] = 1.6e17;
-    y[3] = 2.0;
-    y[4] = 1.0e-30;
-    y[5] = 1.0;
-    y[6] = 16.0;
-    y[7] = 1.0e-30;
-    y[8] = 3.4e17;
-    y[9] = 1.0e-30;
-    y[10] = 9.0;
-    y[11] = 1.0e-60;
-    y[12] = 6.0e-12;
-    y[13] = 6.5e16;
-    y[14] = 2.7e11;
-
-    std::array<std::array<Real, N>, N> jac{};
-    Problem::jacobian(0.0, y, jac);
-
-    std::array<std::array<Real, N>, N> A{};
-    constexpr Real fac = 1.0e6;
-    for (size_type i = 0; i < N; ++i) {
-        for (size_type j = 0; j < N; ++j) {
-            A[i][j] = -jac[i][j];
-        }
-        A[i][i] += fac;
-    }
-    const auto original = A;
-
-    std::array<Real, N> b{};
-    for (size_type i = 0; i < N; ++i) {
-        b[i] = 1.0 + static_cast<Real>(i) * 0.25;
-    }
-    const auto rhs = b;
-
-    std::array<int, N> pivot{};
-    const int info = linalg::primordial_gift_lu_decomposition<N>(A, pivot);
-    assert(info == 0);
-    (void)info;
-    linalg::primordial_gift_lu_solve<N>(A, pivot, b);
-
-    Real max_residual = 0.0;
-    Real max_rhs = 0.0;
-    for (size_type i = 0; i < N; ++i) {
-        Real ax = 0.0;
-        for (size_type j = 0; j < N; ++j) {
-            ax += original[i][j] * b[j];
-        }
-        max_residual = std::max(max_residual, std::abs(ax - rhs[i]));
-        max_rhs = std::max(max_rhs, std::abs(rhs[i]));
-    }
-    assert(max_residual / max_rhs < 1.0e-8);
-    (void)max_residual;
-    (void)max_rhs;
-
-    std::cout << "  Primordial GIFT sparse factor/solve: PASSED\n";
-}
-
 void test_vector_norms() {
     std::cout << "Testing vector norms...\n";
     
@@ -220,7 +154,6 @@ int main() {
     test_matrix_solve();
     test_matrix_solve_regression();
     test_factor_solve();
-    test_primordial_gift_factor_solve();
     test_vector_norms();
     test_matrix_vector();
     

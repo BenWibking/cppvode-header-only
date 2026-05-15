@@ -48,20 +48,3 @@ if (CMAKE_Fortran_COMPILER_ID MATCHES "GNU|Intel|IntelLLVM")
     target_compile_options(robertson_dvode PRIVATE -std=legacy)
 endif()
 add_test(NAME robertson_dvode_runs COMMAND robertson_dvode)
-
-# Fortran RODAS driver for Robertson problem, compared to the C++ RODAS result
-add_executable(robertson_rodas_fortran
-    robertson_rodas_fortran.f90
-    ${CMAKE_SOURCE_DIR}/extern/rodas.f
-    ${CMAKE_SOURCE_DIR}/extern/dc_lapack.f
-    ${CMAKE_SOURCE_DIR}/extern/lapack.f)
-set_target_properties(robertson_rodas_fortran PROPERTIES LINKER_LANGUAGE Fortran)
-set_source_files_properties(
-    ${CMAKE_SOURCE_DIR}/extern/rodas.f
-    ${CMAKE_SOURCE_DIR}/extern/dc_lapack.f
-    ${CMAKE_SOURCE_DIR}/extern/lapack.f
-    PROPERTIES Fortran_FORMAT FIXED Fortran_PREPROCESS OFF)
-if (CMAKE_Fortran_COMPILER_ID MATCHES "GNU|Intel|IntelLLVM")
-    target_compile_options(robertson_rodas_fortran PRIVATE -std=legacy)
-endif()
-add_test(NAME robertson_rodas_fortran_runs COMMAND robertson_rodas_fortran)

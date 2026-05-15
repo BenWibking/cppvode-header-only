@@ -23,7 +23,7 @@ struct ScalarDecay {
 };
 
 bool check_negative_state_rejection() {
-    auto integrator = RODAS<ScalarDecay>{};
+    auto integrator = ROS2S<ScalarDecay>{};
     auto state = RODASState<1>{};
     state.jacobian_analytic = true;
     state.autonomous = true;
@@ -71,7 +71,7 @@ bool check_negative_state_rejection() {
 }
 
 int main() {
-    auto integrator = RODAS<ScalarDecay>{};
+    auto integrator = ROS2S<ScalarDecay>{};
     auto state = RODASState<1>{};
     state.jacobian_analytic = true;
     state.autonomous = true;
