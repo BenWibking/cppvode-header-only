@@ -29,7 +29,7 @@ def parse_metric(pattern: str, text: str) -> float:
     return float(match.group(1))
 
 
-DEFAULT_ROSENBROCK_INTEGRATORS = ["ros2s", "sandu-a", "sandu-b", "sandu-d"]
+DEFAULT_ROSENBROCK_INTEGRATORS = ["ros2s", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X"]
 
 
@@ -38,12 +38,25 @@ def display_name(integrator: str) -> str:
         "ros2s": "ROS2S",
         "sandu-a": "Sandu A",
         "sandu-b": "Sandu B",
+        "sandu-c": "Sandu C",
         "sandu-d": "Sandu D",
     }.get(integrator, integrator.upper())
 
 
+def raw_output_path(raw_output_dir: Path, integrator: str, rtol: float) -> Path:
+    task_id = "manual"
+    try:
+        import os
+        task_id = os.environ.get("SLURM_ARRAY_TASK_ID", os.environ.get("SLURM_JOB_ID", task_id))
+    except Exception:
+        pass
+    safe_rtol = f"{rtol:.17e}".replace("+", "").replace("-", "m")
+    return raw_output_dir / f"raw_{task_id}_{integrator}_{safe_rtol}.log"
+
+
 def run_case(exe: Path, integrator: str, rtol: float, atol: float | None,
-             energy_atol: float | None, grid: int, extra_args: list[str]) -> dict[str, object]:
+             energy_atol: float | None, grid: int, extra_args: list[str],
+             raw_output_dir: Path | None) -> dict[str, object]:
     cmd = [str(exe), "--integrator", integrator, "--rtol", f"{rtol:.17e}"]
     if grid != 1:
         cmd.extend(["--grid", str(grid)])
@@ -54,6 +67,11 @@ def run_case(exe: Path, integrator: str, rtol: float, atol: float | None,
     cmd.extend(extra_args)
     proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
     text = proc.stdout + proc.stderr
+    if raw_output_dir is not None:
+        raw_output_dir.mkdir(parents=True, exist_ok=True)
+        raw_output_path(raw_output_dir, integrator, rtol).write_text(
+            "$ " + " ".join(cmd) + "\n\n" + text
+        )
     try:
         time_sec = parse_metric(r"collapse loop walltime: (" + FLOAT + r") s", text)
         species_err = parse_metric(
@@ -205,6 +223,7 @@ def main() -> int:
     parser.add_argument("--output-csv", type=Path, default=Path("logs/primordial_cpu_pareto.csv"))
     parser.add_argument("--output-plot", type=Path, default=Path("logs/primordial_cpu_pareto_error.png"))
     parser.add_argument("--output-rtol-plot", type=Path, default=Path("logs/primordial_cpu_pareto_rtol.png"))
+    parser.add_argument("--raw-output-dir", type=Path, default=None)
     parser.add_argument("--input-csv", type=Path, default=None)
     parser.add_argument("--skip-plots", action="store_true")
     parser.add_argument("--count", type=int, default=13)
@@ -237,7 +256,7 @@ def main() -> int:
             energy_atol = args.base_energy_atol * scale if args.scale_energy_atol else args.energy_atol
             for integrator in integrators:
                 row = run_case(args.exe, integrator, rtol, atol, energy_atol,
-                               args.grid, args.extra_arg)
+                               args.grid, args.extra_arg, args.raw_output_dir)
                 row["energy_rtol"] = rtol * 1.0e-2
                 rows.append(row)
                 print(

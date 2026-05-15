@@ -44,11 +44,31 @@ def paper_method_d_r(z):
     return (1.0 - z) / (1.0 - 0.5 * z) ** 4
 
 
+def paper_method_c_r(z):
+    sqrt3 = math.sqrt(3.0)
+    gamma = (3.0 + sqrt3) / 6.0
+    a31 = (1272.0 - 823.0 * sqrt3) / 354.0
+    a32 = 3.0 * (-51.0 + 49.0 * sqrt3) / 59.0
+    c21 = -1.0 + 7.0 * sqrt3 / 18.0
+    c31 = (25.0 - 13.0 * sqrt3) / 6.0
+    c32 = 12.0 - 6.0 * sqrt3
+    m1 = (-12089.0 + 5037.0 * sqrt3) / 472.0
+    m2 = 9.0 * (344.0 - 135.0 * sqrt3) / 118.0
+    m3 = 3.0 * (3.0 - sqrt3) / 4.0
+    d = 1.0 - gamma * z
+    k1 = gamma * z / d
+    k2 = gamma * (z + c21 * k1) / d
+    y3 = 1.0 + a31 * k1 + a32 * k2
+    k3 = gamma * (z * y3 + c31 * k1 + c32 * k2) / d
+    return 1.0 + m1 * k1 + m2 * k2 + m3 * k3
+
+
 def draw(z_min, out, title):
     z = np.linspace(z_min, 0.0, 2001)
     fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=160)
     ax.plot(z, code_ros2s_r(z), lw=2.2, label="Code ROS2S")
     ax.plot(z, paper_method_ab_r(z), lw=2.0, ls="--", label="Paper Method A/B")
+    ax.plot(z, paper_method_c_r(z), lw=2.0, ls=":", label="Paper Method C")
     ax.plot(z, paper_method_d_r(z), lw=2.0, ls="-.", label="Paper Method D")
     ax.axhline(0.0, color="0.2", lw=0.8)
     ax.axvline(0.0, color="0.2", lw=0.8)

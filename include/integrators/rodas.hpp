@@ -59,6 +59,7 @@ template <bool CollectStats> struct RODASStatsStorage {
     int n_jac{0};
     int n_accept{0};
     int n_reject{0};
+    int n_negative_reject{0};
     int n_decomp{0};
     int n_solve{0};
     Real last_error{0.0};
@@ -93,6 +94,7 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
     Real fac_min{0.2};
     Real fac_max{6.0};
     Real safe{0.9};
+    bool reject_negative_states{false};
 
     std::array<Real, N> ynew{};
     std::array<Real, N> ak1{};
@@ -105,7 +107,7 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
 
 namespace detail {
 
-enum class RosenbrockMethod { ROS2S, SanduA, SanduB, SanduD };
+enum class RosenbrockMethod { ROS2S, SanduA, SanduB, SanduC, SanduD };
 
 enum class RosenbrockErrorEstimator { StageWeights, FirstStage, EmbeddedWeights };
 
@@ -114,6 +116,7 @@ template <RosenbrockMethod Method> struct RosenbrockCoefficients;
 template <> struct RosenbrockCoefficients<RosenbrockMethod::ROS2S> {
     static constexpr int stages = 3;
     static constexpr int rhs_evaluations_per_step = stages;
+    static constexpr bool reuse_first_stage_rhs = false;
     static constexpr bool reuse_second_stage_rhs = false;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::StageWeights;
@@ -169,6 +172,7 @@ template <> struct RosenbrockCoefficients<RosenbrockMethod::ROS2S> {
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduA> {
     static constexpr int stages = 3;
     static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_first_stage_rhs = false;
     static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::FirstStage;
@@ -222,6 +226,7 @@ template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduA> {
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduB> {
     static constexpr int stages = 3;
     static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_first_stage_rhs = false;
     static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::FirstStage;
@@ -272,9 +277,66 @@ template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduB> {
     }
 };
 
+template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduC> {
+    static constexpr int stages = 3;
+    static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_first_stage_rhs = true;
+    static constexpr bool reuse_second_stage_rhs = false;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::FirstStage;
+    static constexpr Real gamma = 0.78867513459481275;             // (3 + sqrt(3)) / 6
+    static constexpr Real first_stage_weight = 1.2679491924311228; // 1 / gamma
+    static inline constexpr std::array<Real, 4> alpha{0.0, 0.0, 0.6666666666666666, 0.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-0.4335531486700170, 1.7222282832648295, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-0.3264246859454366, 0.0, 0.0, 0.0}},
+        {{0.4138899169340995, 1.6076951545867360, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static inline constexpr std::array<Real, 4> m{-7.1285171234651825, 8.4030361763035106,
+                                                   0.9509618943233421, 0.0};
+    static inline constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 0.0, 0.6666666666666666, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0},
+            {-0.4335531486700170, 1.7222282832648295, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {-0.3264246859454366, 0.0, 0.0, 0.0},
+            {0.4138899169340995, 1.6076951545867360, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{-7.1285171234651825, 8.4030361763035106,
+                                0.9509618943233421, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{0.0, 0.0, 0.0, 0.0};
+        return table[i];
+    }
+};
+
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduD> {
     static constexpr int stages = 4;
     static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_first_stage_rhs = false;
     static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::EmbeddedWeights;
@@ -461,6 +523,11 @@ class RosenbrockIntegrator {
         }
 
         std::array<Real, N> *rhs_values = nullptr;
+        if constexpr (C::reuse_first_stage_rhs) {
+            if (stage == 1) {
+                rhs_values = &s.rhs_reuse;
+            }
+        }
         if constexpr (C::reuse_second_stage_rhs) {
             if (stage > 1) {
                 rhs_values = &s.rhs_reuse;
@@ -469,6 +536,11 @@ class RosenbrockIntegrator {
         auto &rhs_tmp = s.rhs_scratch(s.ynew);
         if (rhs_values == nullptr) {
             rhs(x + C::alpha_value(stage) * h, s.ynew, rhs_tmp);
+            if constexpr (C::reuse_first_stage_rhs) {
+                if (stage == 0) {
+                    s.rhs_reuse = rhs_tmp;
+                }
+            }
             if constexpr (C::reuse_second_stage_rhs) {
                 if (stage == 1) {
                     s.rhs_reuse = rhs_tmp;
@@ -553,6 +625,21 @@ class RosenbrockIntegrator {
         if constexpr (CollectStats) {
             s.n_reject += 1;
         }
+    }
+
+    static INTEGRATORS_HOST_DEVICE void record_negative_reject(State &s) {
+        if constexpr (CollectStats) {
+            s.n_negative_reject += 1;
+        }
+    }
+
+    static INTEGRATORS_HOST_DEVICE bool has_negative_candidate_state(const State &s) {
+        for (size_type i = 0; i < N; ++i) {
+            if (s.ynew[i] < 0.0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static INTEGRATORS_HOST_DEVICE Real error_norm(const State &s) {
@@ -671,7 +758,9 @@ class RosenbrockIntegrator {
                 record_error_stats(s, err, h, raw_fac, lower_fac, upper_fac);
                 const Real fac_step = std::max(lower_fac, std::min(upper_fac, raw_fac));
                 Real hnew = h / fac_step;
-                if (err <= 1.0) {
+                const bool negative_state =
+                    s.reject_negative_states && has_negative_candidate_state(s);
+                if (err <= 1.0 && !negative_state) {
                     n_accept += 1;
                     record_accept(s, n_accept);
                     if (s.predictive_controller) {
@@ -701,7 +790,12 @@ class RosenbrockIntegrator {
 
                 reject = true;
                 last = false;
-                h = hnew;
+                if (negative_state) {
+                    record_negative_reject(s);
+                    h = posneg * std::min(std::abs(hnew), std::abs(h) * s.fac_min);
+                } else {
+                    h = hnew;
+                }
                 if (n_accept >= 1) {
                     record_reject(s);
                 }
@@ -733,6 +827,15 @@ template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats
           bool StaticTolerances = false>
 using RosenbrockSanduB =
     RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduB, AnalyticJacobianOnly,
+                         CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                         ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using RosenbrockSanduC =
+    RosenbrockIntegrator<Problem, detail::RosenbrockMethod::SanduC, AnalyticJacobianOnly,
                          CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
                          ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
 

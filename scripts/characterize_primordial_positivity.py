@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-METHODS = ["ros2s", "sandu-a", "sandu-b", "sandu-d"]
+METHODS = ["ros2s", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
 
 
 def extract_csv_block(text: str) -> list[dict[str, str]]:
@@ -39,6 +39,8 @@ def run_method(exe: Path, method: str, args: argparse.Namespace) -> tuple[list[d
         f"{args.energy_atol:.17e}",
         "--positivity-report",
     ]
+    if args.reject_negative_substeps:
+        cmd.append("--reject-negative-substeps")
     proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
     rows = extract_csv_block(proc.stdout + proc.stderr)
     for row in rows:
@@ -121,6 +123,7 @@ def main() -> int:
     parser.add_argument("--rtol", type=float, default=1.0e-4)
     parser.add_argument("--atol", type=float, default=1.0e-4)
     parser.add_argument("--energy-atol", type=float, default=1.0e-6)
+    parser.add_argument("--reject-negative-substeps", action="store_true")
     parser.add_argument("--output-csv", type=Path, default=Path("logs/primordial_rosenbrock_positivity.csv"))
     parser.add_argument("--output-md", type=Path, default=Path("logs/primordial_rosenbrock_positivity.md"))
     args = parser.parse_args()

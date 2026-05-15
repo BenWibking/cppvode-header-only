@@ -82,6 +82,25 @@ Real method_ab_transfer(Real z) {
 
 Real method_d_transfer(Real z) { return (1.0 - z) / std::pow(1.0 - 0.5 * z, 4); }
 
+Real method_c_transfer(Real z) {
+    constexpr Real gamma = 0.78867513459481275;
+    constexpr Real a31 = -0.4335531486700170;
+    constexpr Real a32 = 1.7222282832648295;
+    constexpr Real c21 = -0.3264246859454366;
+    constexpr Real c31 = 0.4138899169340995;
+    constexpr Real c32 = 1.6076951545867360;
+    constexpr Real m1 = -7.1285171234651825;
+    constexpr Real m2 = 8.4030361763035106;
+    constexpr Real m3 = 0.9509618943233421;
+
+    const Real solve_scale = gamma / (1.0 - gamma * z);
+    const Real k1 = solve_scale * z;
+    const Real k2 = solve_scale * (z + c21 * k1);
+    const Real y3 = 1.0 + a31 * k1 + a32 * k2;
+    const Real k3 = solve_scale * (z * y3 + c31 * k1 + c32 * k2);
+    return 1.0 + m1 * k1 + m2 * k2 + m3 * k3;
+}
+
 int main() {
     constexpr Real h = 0.1;
     constexpr Real z = -1.0;
@@ -92,6 +111,10 @@ int main() {
     }
     if (!check_one_step<RosenbrockSanduB<ScalarDecaySandu>>(h, method_ab_transfer(z),
                                                             "RosenbrockSanduB", 2)) {
+        return 1;
+    }
+    if (!check_one_step<RosenbrockSanduC<ScalarDecaySandu>>(h, method_c_transfer(z),
+                                                            "RosenbrockSanduC", 2)) {
         return 1;
     }
     if (!check_one_step<RosenbrockSanduD<ScalarDecaySandu>>(h, method_d_transfer(z),

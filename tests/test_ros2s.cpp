@@ -22,6 +22,54 @@ struct ScalarDecay {
     }
 };
 
+bool check_negative_state_rejection() {
+    auto integrator = RODAS<ScalarDecay>{};
+    auto state = RODASState<1>{};
+    state.jacobian_analytic = true;
+    state.autonomous = true;
+    state.t = 0.0;
+    state.tout = 10.0;
+    state.dt = 10.0;
+    state.rtol = 1.e6;
+    state.atol = 1.e6;
+    state.y = {1.0};
+
+    auto problem_state = ScalarDecay::state_type{1.0};
+    const auto result_without_guard = integrator.integrate(problem_state, state);
+    if (result_without_guard != IntegratorResult::SUCCESS || state.y[0] >= 0.0) {
+        std::cerr << "ROS2S baseline did not accept the negative loose-tolerance state\n";
+        return false;
+    }
+
+    auto guarded_state = RODASState<1>{};
+    guarded_state.jacobian_analytic = true;
+    guarded_state.autonomous = true;
+    guarded_state.reject_negative_states = true;
+    guarded_state.t = 0.0;
+    guarded_state.tout = 10.0;
+    guarded_state.dt = 10.0;
+    guarded_state.rtol = 1.e6;
+    guarded_state.atol = 1.e6;
+    guarded_state.y = {1.0};
+
+    problem_state = ScalarDecay::state_type{1.0};
+    const auto result_with_guard = integrator.integrate(problem_state, guarded_state);
+    if (result_with_guard != IntegratorResult::SUCCESS) {
+        std::cerr << "ROS2S guarded integration failed with code "
+                  << static_cast<int>(result_with_guard) << "\n";
+        return false;
+    }
+    if (guarded_state.n_negative_reject <= 0) {
+        std::cerr << "ROS2S guarded integration did not record a negative-state rejection\n";
+        return false;
+    }
+    if (guarded_state.y[0] < 0.0 || problem_state[0] != guarded_state.y[0]) {
+        std::cerr << "ROS2S guarded integration accepted a negative final state\n";
+        return false;
+    }
+    return true;
+}
+
 int main() {
     auto integrator = RODAS<ScalarDecay>{};
     auto state = RODASState<1>{};
@@ -50,6 +98,9 @@ int main() {
     }
     if (problem_state[0] != state.y[0]) {
         std::cerr << "problem_state not synchronized\n";
+        return 1;
+    }
+    if (!check_negative_state_rejection()) {
         return 1;
     }
 
