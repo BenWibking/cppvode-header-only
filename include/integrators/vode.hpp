@@ -48,6 +48,9 @@ struct VODEState : public IntegratorState<N> {
     int n_rhs{0};
     int n_jac{0};
     int n_step{0};
+    int n_accept{0};
+    int n_reject{0};
+    int n_negative_reject{0};
     int n_decomp{0};
     int n_solve{0};
     int n_error_fails{0};
@@ -89,6 +92,7 @@ struct VODEState : public IntegratorState<N> {
     // Optional narrow diagnostic trace for chemistry debugging.
     bool trace_deuterium_components{false};
     int trace_max_internal_steps{200000};
+    bool reject_negative_states{false};
 
     // Helper accessors for 1-based arrays
     INTEGRATORS_HOST_DEVICE Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
