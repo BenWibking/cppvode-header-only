@@ -23,8 +23,9 @@ struct ScalarDecay {
 };
 
 bool check_negative_state_rejection() {
-    auto integrator = ROS2S<ScalarDecay>{};
-    auto state = RODASState<1>{};
+    using Integrator = Rosenbrock<ScalarDecay>;
+    auto integrator = Integrator{};
+    auto state = Integrator::State{};
     state.jacobian_analytic = true;
     state.autonomous = true;
     state.t = 0.0;
@@ -41,7 +42,7 @@ bool check_negative_state_rejection() {
         return false;
     }
 
-    auto guarded_state = RODASState<1>{};
+    auto guarded_state = Integrator::State{};
     guarded_state.jacobian_analytic = true;
     guarded_state.autonomous = true;
     guarded_state.reject_negative_states = true;
@@ -71,8 +72,13 @@ bool check_negative_state_rejection() {
 }
 
 int main() {
-    auto integrator = ROS2S<ScalarDecay>{};
-    auto state = RODASState<1>{};
+    using Integrator = Rosenbrock<ScalarDecay>;
+    using Factory = IntegratorFactory<ScalarDecay>;
+    [[maybe_unused]] auto factory_integrator = Factory::create<Factory::Type::ROSENBROCK>();
+    [[maybe_unused]] auto factory_state = Factory::state_type<Factory::Type::ROSENBROCK>{};
+
+    auto integrator = Integrator{};
+    auto state = Integrator::State{};
     state.jacobian_analytic = true;
     state.autonomous = true;
     state.t = 0.0;

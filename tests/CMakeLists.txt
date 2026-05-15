@@ -36,14 +36,14 @@ target_link_libraries(test_vode_robertson_strict PRIVATE integrators)
 add_test(NAME vode_robertson_strict_test COMMAND test_vode_robertson_strict)
 
 # ROS2S Robertson regression
-add_executable(test_rodas_robertson test_rodas_robertson.cpp)
-target_link_libraries(test_rodas_robertson PRIVATE integrators)
-add_test(NAME rodas_robertson_test COMMAND test_rodas_robertson)
+add_executable(test_rosenbrock_robertson test_rosenbrock_robertson.cpp)
+target_link_libraries(test_rosenbrock_robertson PRIVATE integrators)
+add_test(NAME rosenbrock_robertson_test COMMAND test_rosenbrock_robertson)
 
 # ROS2S Rosenbrock tableau regression
-add_executable(test_ros2s test_ros2s.cpp)
-target_link_libraries(test_ros2s PRIVATE integrators)
-add_test(NAME ros2s_test COMMAND test_ros2s)
+add_executable(test_rosenbrock test_rosenbrock.cpp)
+target_link_libraries(test_rosenbrock PRIVATE integrators)
+add_test(NAME rosenbrock_test COMMAND test_rosenbrock)
 
 # Sandu positivity-favorable Rosenbrock method regressions
 add_executable(test_rosenbrock_sandu test_rosenbrock_sandu.cpp)

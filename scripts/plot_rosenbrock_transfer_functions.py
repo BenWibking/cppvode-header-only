@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# Local ROS2S coefficients from include/integrators/rodas.hpp.
+# Local ROS2S coefficients from include/integrators/rosenbrock.hpp.
 GAMMA = 0.292893218813452
 A21 = 2.0000000000000036
 A31 = 6.828427124746214

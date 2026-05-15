@@ -83,14 +83,14 @@ struct problem_rhs_aliasing<Problem, std::void_t<decltype(Problem::rhs_allows_in
 };
 
 template<typename Problem, typename = void>
-struct problem_ros2s_static_tolerances {
+struct problem_rosenbrock_static_tolerances {
     static constexpr bool available = false;
 };
 
 template<typename Problem>
-struct problem_ros2s_static_tolerances<Problem, std::void_t<decltype(
-    Problem::ros2s_rtol(std::declval<size_type>())),
-    decltype(Problem::ros2s_atol(std::declval<size_type>()))>> {
+struct problem_rosenbrock_static_tolerances<Problem, std::void_t<decltype(
+    Problem::rosenbrock_rtol(std::declval<size_type>())),
+    decltype(Problem::rosenbrock_atol(std::declval<size_type>()))>> {
     static constexpr bool available = true;
 };
 
@@ -108,8 +108,8 @@ struct ProblemTraits {
     static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
     static constexpr bool rhs_allows_input_output_alias =
         detail::problem_rhs_aliasing<Problem>::available;
-    static constexpr bool has_ros2s_static_tolerances =
-        detail::problem_ros2s_static_tolerances<Problem>::available;
+    static constexpr bool has_rosenbrock_static_tolerances =
+        detail::problem_rosenbrock_static_tolerances<Problem>::available;
 };
 
 // Base integrator state

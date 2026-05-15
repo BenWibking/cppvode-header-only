@@ -6,8 +6,8 @@ target_link_libraries(simple_ode PRIVATE integrators)
 add_executable(robertson robertson.cpp)
 target_link_libraries(robertson PRIVATE integrators)
 
-add_executable(robertson_rodas robertson_rodas.cpp)
-target_link_libraries(robertson_rodas PRIVATE integrators)
+add_executable(robertson_rosenbrock robertson_rosenbrock.cpp)
+target_link_libraries(robertson_rosenbrock PRIVATE integrators)
 
 add_executable(primordial_chem primordial_chem.cpp)
 target_link_libraries(primordial_chem PRIVATE integrators)
@@ -33,7 +33,7 @@ endif()
 # Add examples as tests
 add_test(NAME simple_ode_test COMMAND simple_ode)
 add_test(NAME robertson_test COMMAND robertson)
-add_test(NAME robertson_rodas_test COMMAND robertson_rodas)
+add_test(NAME robertson_rosenbrock_test COMMAND robertson_rosenbrock)
 add_test(NAME primordial_chem_test COMMAND primordial_chem)
 if(INTEGRATORS_CUDA_ENABLED)
     set_tests_properties(primordial_chem_test PROPERTIES

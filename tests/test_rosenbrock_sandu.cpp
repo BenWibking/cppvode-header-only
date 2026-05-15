@@ -32,7 +32,8 @@ bool check_one_step(Real h, Real expected, const char *name, int expected_rhs_ca
     ScalarDecaySandu::rhs_calls = 0;
     ScalarDecaySandu::jacobian_calls = 0;
     auto integrator = Integrator{};
-    auto state = RODASState<1>{};
+    using State = typename Integrator::State;
+    auto state = State{};
     state.jacobian_analytic = true;
     state.autonomous = true;
     state.t = 0.0;
