@@ -8,18 +8,31 @@ project(HeaderOnlyIntegrators
     LANGUAGES CXX Fortran)
 
 option(BUILD_CUDA_TESTS "Build CUDA-based GPU regression tests" OFF)
+option(BUILD_CUDA_EXAMPLES "Build CUDA-based GPU examples" OFF)
+option(INTEGRATORS_USE_CUSOLVERDX "Use cuSolverDx for CUDA device LU factorization/solve" OFF)
+set(INTEGRATORS_CUSOLVERDX_TARGET "static" CACHE STRING
+    "cuSolverDx MathDx target to link when INTEGRATORS_USE_CUSOLVERDX=ON: static or fatbin")
+set_property(CACHE INTEGRATORS_CUSOLVERDX_TARGET PROPERTY STRINGS static fatbin)
 
-# Optionally enable CUDA if a compiler is available (for GPU tests)
+# Optionally enable CUDA if a compiler is available (for GPU tests or cuSolverDx)
 include(CheckLanguage)
 check_language(CUDA)
-if(BUILD_CUDA_TESTS AND CMAKE_CUDA_COMPILER)
+if((BUILD_CUDA_TESTS OR BUILD_CUDA_EXAMPLES OR INTEGRATORS_USE_CUSOLVERDX) AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    set(INTEGRATORS_CUDA_ENABLED ON)
     message(STATUS "CUDA compiler detected: enabling CUDA language")
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_EXTENSIONS OFF)
     # Suppress host compiler pedantic warnings when compiling CUDA sources
     # Route to host via nvcc's -Xcompiler to avoid nvcc parsing issues
     add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>)
+elseif(INTEGRATORS_USE_CUSOLVERDX)
+    message(FATAL_ERROR "INTEGRATORS_USE_CUSOLVERDX=ON requires a CUDA compiler")
 elseif(BUILD_CUDA_TESTS)
     message(WARNING "BUILD_CUDA_TESTS=ON but no CUDA compiler detected; GPU tests will be skipped")
+elseif(BUILD_CUDA_EXAMPLES)
+    message(WARNING "BUILD_CUDA_EXAMPLES=ON but no CUDA compiler detected; GPU examples will use CPU builds")
 endif()
 
 # Set C++ standard
@@ -29,12 +42,32 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Add the header-only library as interface target
 add_library(integrators INTERFACE)
+target_compile_features(integrators INTERFACE cxx_std_20)
 target_include_directories(integrators INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
 # System LAPACK support removed; always use built-in LU/solve
+
+if(INTEGRATORS_USE_CUSOLVERDX)
+    if(CMAKE_VERSION VERSION_LESS 3.18)
+        message(FATAL_ERROR "INTEGRATORS_USE_CUSOLVERDX=ON requires CMake 3.18 or newer for MathDx CMake targets")
+    endif()
+
+    find_package(mathdx REQUIRED COMPONENTS cusolverdx CONFIG)
+    if(INTEGRATORS_CUSOLVERDX_TARGET STREQUAL "static")
+        set(INTEGRATORS_CUSOLVERDX_LINK_TARGET mathdx::cusolverdx)
+    elseif(INTEGRATORS_CUSOLVERDX_TARGET STREQUAL "fatbin")
+        set(INTEGRATORS_CUSOLVERDX_LINK_TARGET mathdx::cusolverdx_fatbin)
+    else()
+        message(FATAL_ERROR
+            "INTEGRATORS_CUSOLVERDX_TARGET must be either 'static' or 'fatbin'")
+    endif()
+
+    target_compile_definitions(integrators INTERFACE INTEGRATORS_USE_CUSOLVERDX)
+    target_link_libraries(integrators INTERFACE ${INTEGRATORS_CUSOLVERDX_LINK_TARGET})
+endif()
 
 # Optional verbose debug logging for VODE internals
 # Enable with: -DINTEGRATORS_VODE_DEBUG=ON
@@ -49,7 +82,7 @@ option(WARNINGS_AS_ERRORS "Treat C/C++ warnings as errors (excluding CUDA/Fortra
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(integrators INTERFACE
-        -Wall -Wextra -Wpedantic -O3
+        -Wall -Wextra -Wpedantic
         $<$<CONFIG:Debug>:-g -O0 -fsanitize=address>
     )
     if(WARNINGS_AS_ERRORS)

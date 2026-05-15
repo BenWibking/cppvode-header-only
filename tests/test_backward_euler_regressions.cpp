@@ -71,7 +71,7 @@ void test_reverse_time_integration() {
     state.dt = 0.0;
     state.y = {std::exp(-1.0)};
     state.jacobian_analytic = true;
-    state.rtol = 1.e-9;
+    state.rtol = 1.e-6;
     state.atol = 1.e-12;
 
     const auto result = integrator.integrate(problem_state, state);

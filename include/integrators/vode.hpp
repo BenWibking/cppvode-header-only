@@ -13,7 +13,7 @@
 namespace integrators {
 
 // Debug logging macro
-#ifdef VODE_DEBUG
+#if defined(VODE_DEBUG) && !defined(__CUDA_ARCH__)
 #define VODE_DBG(MSG) do { \
     std::cout.setf(std::ios::scientific, std::ios::floatfield); \
     std::cout.precision(17); \
@@ -48,6 +48,12 @@ struct VODEState : public IntegratorState<N> {
     int n_rhs{0};
     int n_jac{0};
     int n_step{0};
+    int n_accept{0};
+    int n_reject{0};
+    int n_negative_reject{0};
+    int n_decomp{0};
+    int n_solve{0};
+    int n_error_fails{0};
     int err_fails{0}; // consecutive error test failures
 
     // Flags
@@ -83,11 +89,16 @@ struct VODEState : public IntegratorState<N> {
     std::array<std::array<Real, N>, N> jacobian{}; // P matrix factored
     std::array<int, N> pivot{};
 
+    // Optional narrow diagnostic trace for chemistry debugging.
+    bool trace_deuterium_components{false};
+    int trace_max_internal_steps{200000};
+    bool reject_negative_states{false};
+
     // Helper accessors for 1-based arrays
-    inline Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
-    inline Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
-    inline Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
-    inline Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& EL(int i) { return el[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& TAU(int i) { return tau[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& TQ(int i) { return tq[static_cast<size_type>(i-1)]; }
+    INTEGRATORS_HOST_DEVICE Real& YH(int i, int j) { return yh[static_cast<size_type>(i-1)][static_cast<size_type>(j-1)]; }
 };
 
 template<typename Problem>
@@ -99,17 +110,91 @@ public:
 
 private:
     // Evaluate RHS f(t, y) into out
-    static inline void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
+    static INTEGRATORS_HOST_DEVICE void rhs(Real t, const std::array<Real, N>& y, std::array<Real, N>& out) {
         Problem::rhs(t, y, out);
     }
 
+    static INTEGRATORS_HOST_DEVICE void trace_deuterium_state(const char* event,
+                                                                     const State& s,
+                                                                     const std::array<Real, N>& y,
+                                                                     const std::array<Real, N>* f,
+                                                                     Real aux) {
+        if (!s.trace_deuterium_components || N <= 14 ||
+            s.n_step > s.trace_max_internal_steps) {
+            return;
+        }
+#if defined(__CUDA_ARCH__)
+        printf("vode_trace,%s,%d,%.17e,%.17e,%d,%d,%d,%.17e,%.17e,%.17e,%.17e,%.17e",
+               event, s.n_step, s.tn, s.H, static_cast<int>(s.NQ), s.n_rhs, s.n_jac,
+               y[4], y[5], y[9], y[10], y[14]);
+        if (f != nullptr) {
+            printf(",%.17e,%.17e,%.17e,%.17e", (*f)[4], (*f)[5], (*f)[9], (*f)[10]);
+        } else {
+            printf(",nan,nan,nan,nan");
+        }
+        printf(",%.17e\n", aux);
+#else
+        std::cout << "vode_trace," << event
+                  << "," << s.n_step
+                  << "," << s.tn
+                  << "," << s.H
+                  << "," << static_cast<int>(s.NQ)
+                  << "," << s.n_rhs
+                  << "," << s.n_jac
+                  << "," << y[4]
+                  << "," << y[5]
+                  << "," << y[9]
+                  << "," << y[10]
+                  << "," << y[14];
+        if (f != nullptr) {
+            std::cout << "," << (*f)[4]
+                      << "," << (*f)[5]
+                      << "," << (*f)[9]
+                      << "," << (*f)[10];
+        } else {
+            std::cout << ",nan,nan,nan,nan";
+        }
+        std::cout << "," << aux << "\n";
+#endif
+    }
+
+    static INTEGRATORS_HOST_DEVICE void clean_state_vector(State& s) {
+        if (!s.clean_constrained_components) return;
+
+        const int constrained_components = std::min<int>(s.constrained_components, static_cast<int>(N));
+        for (int i = 0; i < constrained_components; ++i) {
+            auto& value = s.y[static_cast<size_type>(i)];
+            value = std::max(value, s.component_floor);
+        }
+    }
+
+    static INTEGRATORS_HOST_DEVICE void rhs_state(Real t, State& s, std::array<Real, N>& out) {
+        clean_state_vector(s);
+        rhs(t, s.y, out);
+    }
+
     // Evaluate analytic Jacobian if available
-    static inline void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
+    static INTEGRATORS_HOST_DEVICE void jacobian(Real t, const std::array<Real, N>& y, std::array<std::array<Real, N>, N>& J) {
         Problem::jacobian(t, y, J);
     }
 
+    static INTEGRATORS_HOST_DEVICE Real rtol_for(const State& s, size_type i) {
+        return s.use_vector_tolerances ? s.rtol_vec[i] : s.rtol;
+    }
+
+    static INTEGRATORS_HOST_DEVICE Real atol_for(const State& s, size_type i) {
+        return s.use_vector_tolerances ? s.atol_vec[i] : s.atol;
+    }
+
+    static INTEGRATORS_HOST_DEVICE void update_error_weights(State& s) {
+        for (size_type i = 0; i < N; ++i) {
+            s.ewt[i] = rtol_for(s, i) * std::abs(s.YH(static_cast<int>(i+1), 1)) + atol_for(s, i);
+            s.ewt[i] = 1.0 / s.ewt[i];
+        }
+    }
+
     // dvset: set integration coefficients
-    static void dvset(State& s) {
+    static INTEGRATORS_HOST_DEVICE void dvset(State& s) {
         constexpr Real CORTES = 0.1;
         const Real FLOTL = static_cast<Real>(s.L);
         const int NQM1 = s.NQ - 1;
@@ -169,7 +254,7 @@ private:
     }
 
     // Multiply yh by Pascal triangle matrix (advance prediction)
-    static void advance_nordsieck(State& s) {
+    static INTEGRATORS_HOST_DEVICE void advance_nordsieck(State& s) {
         for (int k = s.NQ; k >= 1; --k) {
             for (int j = k; j <= s.NQ; ++j) {
                 for (size_type i = 1; i <= N; ++i) {
@@ -180,7 +265,7 @@ private:
     }
 
     // Undo Pascal multiplication (retract)
-    static void retract_nordsieck(State& s) {
+    static INTEGRATORS_HOST_DEVICE void retract_nordsieck(State& s) {
         for (int k = s.NQ; k >= 1; --k) {
             for (int j = k; j <= s.NQ; ++j) {
                 for (size_type i = 1; i <= N; ++i) {
@@ -191,16 +276,10 @@ private:
     }
 
     // dvjac: build and factor P = I - h*rl1*J
-    static void dvjac(State& s) {
+    static INTEGRATORS_HOST_DEVICE int dvjac(State& s) {
         // Build Jacobian J
         if (s.jacobian_analytic && ProblemTraits<Problem>::has_analytic_jacobian) {
             if constexpr (ProblemTraits<Problem>::has_analytic_jacobian) {
-                if (s.n_step == 1 && !s.debug_dump_done) {
-                    if constexpr (N >= 3) {
-                        VODE_DBG("DUMP y for J (C++): " << s.y[0] << ", " << s.y[1] << ", " << s.y[2]);
-                        VODE_DBG("DUMP YH(:,1) (C++): " << s.YH(1,1) << ", " << s.YH(2,1) << ", " << s.YH(3,1));
-                    }
-                }
                 jacobian(s.tn, s.y, s.jacobian);
             }
         } else {
@@ -220,7 +299,7 @@ private:
                 s.y[j] += R;
                 const Real invR = 1.0 / R;
                 std::array<Real, N> fpert{};
-                rhs(s.tn, s.y, fpert);
+                rhs_state(s.tn, s, fpert);
                 for (size_type i = 0; i < N; ++i) {
                     s.jacobian[i][j] = (fpert[i] - s.savf[i]) * invR;
                 }
@@ -229,18 +308,12 @@ private:
             s.n_rhs += static_cast<int>(N);
         }
         s.n_jac += 1;
+        s.NSLJ = s.n_step;
 
         // Form P = I - h*rl1*J and factor
         const Real hrl1 = s.H * s.RL1;
         const Real con = -hrl1;
-        if (s.n_step == 1 && !s.debug_dump_done) {
-            if constexpr (N >= 3) {
-                VODE_DBG("DUMP J (C++):");
-                for (size_type i = 0; i < N; ++i) {
-                    VODE_DBG("J row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
-                }
-            }
-        }
+
         // Mirror DVODE arithmetic: scale entire matrix by con, then add identity
         for (size_type j = 0; j < N; ++j) {
             for (size_type i = 0; i < N; ++i) {
@@ -250,140 +323,138 @@ private:
         for (size_type i = 0; i < N; ++i) {
             s.jacobian[i][i] += 1.0;
         }
-        if (s.n_step == 1 && !s.debug_dump_done) {
-            if constexpr (N >= 3) {
-                VODE_DBG("DUMP P (C++):");
-                for (size_type i = 0; i < N; ++i) {
-                    VODE_DBG("P row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
-                }
-            }
-        }
         int ier = linalg::lu_decomposition<N, true>(s.jacobian, s.pivot);
+        if (ier == 0) {
+            s.n_decomp += 1;
+        }
         s.JCUR = 1;
-        if (s.n_step == 1 && !s.debug_dump_done) {
-            if constexpr (N >= 3) {
-                VODE_DBG("DUMP LU (C++), ipvt=" << s.pivot[0] << "," << s.pivot[1] << "," << s.pivot[2]);
-                for (size_type i = 0; i < N; ++i) {
-                    VODE_DBG("LU row " << i << ": " << s.jacobian[i][0] << ", " << s.jacobian[i][1] << ", " << s.jacobian[i][2]);
-                }
-            }
-        }
-        if (ier != 0) {
-            // Mark as failure by setting ICF and leave factorization as-is
-            s.ICF = 2;
-        }
+        return ier;
     }
 
     // dvnlsd: nonlinear solve for one step, returns ACNRM and sets NFLAG
-    static Real dvnlsd(int& NFLAG, State& s) {
+    static INTEGRATORS_HOST_DEVICE Real dvnlsd(int& NFLAG, State& s) {
         constexpr Real CCMAX = 0.3;
         constexpr Real CRDOWN = 0.3;
         constexpr Real RDIV = 2.0;
         constexpr int MAXCOR = 3;
         constexpr int MSBP = 20;
 
-        if (NFLAG == 0) s.ICF = 0;
-        if (NFLAG == -2) s.IPUP = 1;
-
-        // Check if we should update Jacobian
-        s.DRC = std::abs(s.RC - 1.0);
-        if (s.DRC > CCMAX || s.n_step >= s.NSLP + MSBP) s.IPUP = 1;
-
+        Real ACNRM = 1.e10;
         bool converged = false;
         int M = 0;
-        Real DELP = 0.0;
+        Real DEL = 0.0;
 
-        // Initialize y from yh(:,1) and evaluate f
-        for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1);
-        rhs(s.tn, s.y, s.savf);
-        s.n_rhs++;
-
-        if (s.IPUP == 1) {
-            dvjac(s);
-            VODE_DBG("dvjac: updated P; JCUR=" << int(s.JCUR) << " ICF=" << int(s.ICF));
-            s.IPUP = 0; s.RC = 1.0; s.DRC = 0.0; s.CRATE = 1.0; s.NSLP = s.n_step;
-            // If factorization failed, force retry with smaller step
-            if (s.ICF == 2) { NFLAG = -1; s.IPUP = 1; return 1e10; }
-        }
-
-        for (size_type i = 0; i < N; ++i) s.acor[i] = 0.0;
-
-        Real ACNRM = 1e10;
         while (true) {
-            // Build corrector RHS: (h*rl1)*f - (rl1*yh(:,2) + acor)
-            std::array<Real, N> rhs_c{};
-            for (size_type i = 0; i < N; ++i) rhs_c[i] = (s.RL1 * s.H) * s.savf[i] - (s.RL1 * s.YH(static_cast<int>(i+1), 2) + s.acor[i]);
-            if (s.n_step == 1 && !s.debug_dump_done) {
-                if constexpr (N >= 3) {
-                    VODE_DBG("DUMP PRED YH2 (C++): " << s.YH(1,2) << ", " << s.YH(2,2) << ", " << s.YH(3,2));
-                    VODE_DBG("DUMP SAVF (C++): " << s.savf[0] << ", " << s.savf[1] << ", " << s.savf[2]);
-                }
-            }
-            // Instrument: norm of RHS before solve
-            {
-                Real DELrhs = 0.0;
-                for (size_type i = 0; i < N; ++i) DELrhs += (rhs_c[i] * s.ewt[i]) * (rhs_c[i] * s.ewt[i]);
-                DELrhs = std::sqrt(DELrhs / static_cast<Real>(N));
-                VODE_DBG("dvnlsd: RHS_DEL=" << DELrhs);
-            }
-            // Solve P * delta = rhs_c
-            auto delta = rhs_c;
-            linalg::lu_solve<N, true>(s.jacobian, s.pivot, delta);
-            if (s.RC != 1.0) {
-                const Real CSCALE = 2.0 / (1.0 + s.RC);
-                for (size_type i = 0; i < N; ++i) delta[i] *= CSCALE;
-            }
-            if (s.n_step == 1 && !s.debug_dump_done) {
-                if constexpr (N >= 3) {
-                    VODE_DBG("DUMP RHS (C++): " << rhs_c[0] << ", " << rhs_c[1] << ", " << rhs_c[2]);
-                    VODE_DBG("DUMP SOL (C++): " << delta[0] << ", " << delta[1] << ", " << delta[2]);
-                }
-            }
+            if (NFLAG == 0) s.ICF = 0;
+            if (NFLAG == -2) s.IPUP = 1;
 
-            // Compute norm of correction
-            Real DEL = 0.0;
-            for (size_type i = 0; i < N; ++i) DEL += (delta[i] * s.ewt[i]) * (delta[i] * s.ewt[i]);
-            DEL = std::sqrt(DEL / static_cast<Real>(N));
-            VODE_DBG("dvnlsd: M=" << M << " DEL=" << DEL);
+            s.DRC = std::abs(s.RC - 1.0);
+            if (s.DRC > CCMAX || s.n_step >= s.NSLP + MSBP) s.IPUP = 1;
 
-            for (size_type i = 0; i < N; ++i) s.acor[i] += delta[i];
-            for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1) + s.acor[i];
+            M = 0;
+            Real DELP = 0.0;
 
-            if (M != 0) s.CRATE = std::max(CRDOWN * s.CRATE, DEL / DELP);
-            const Real DCON = DEL * std::min(1.0, s.CRATE) / s.TQ(4);
-            VODE_DBG("dvnlsd: DCON=" << DCON << " CRATE=" << s.CRATE << " RL1=" << s.RL1 << " H=" << s.H);
-            if (DCON <= 1.0) { converged = true; ACNRM = (M == 0 ? DEL : 0.0); break; }
-
-            M += 1;
-            if (M == MAXCOR) break;
-            if (M >= 2 && DEL > RDIV * DELP) break;
-
-            DELP = DEL;
-            rhs(s.tn, s.y, s.savf);
+            for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1);
+            rhs_state(s.tn, s, s.savf);
             s.n_rhs++;
+            trace_deuterium_state("corrector_rhs", s, s.y, &s.savf, static_cast<Real>(NFLAG));
+
+            if (s.IPUP == 1) {
+                const int IERPJ = dvjac(s);
+                VODE_DBG("dvjac: updated P; JCUR=" << int(s.JCUR) << " ICF=" << int(s.ICF));
+                s.IPUP = 0;
+                s.RC = 1.0;
+                s.DRC = 0.0;
+                s.CRATE = 1.0;
+                s.NSLP = s.n_step;
+
+                if (IERPJ != 0) {
+                    NFLAG = -1;
+                    s.ICF = 2;
+                    s.IPUP = 1;
+                    return ACNRM;
+                }
+            }
+
+            for (size_type i = 0; i < N; ++i) s.acor[i] = 0.0;
+
+            while (true) {
+                std::array<Real, N> delta{};
+                for (size_type i = 0; i < N; ++i) {
+                    delta[i] = (s.RL1 * s.H) * s.savf[i] -
+                               (s.RL1 * s.YH(static_cast<int>(i+1), 2) + s.acor[i]);
+                }
+
+                linalg::lu_solve<N, true>(s.jacobian, s.pivot, delta);
+                s.n_solve += 1;
+
+                if (s.RC != 1.0) {
+                    const Real CSCALE = 2.0 / (1.0 + s.RC);
+                    for (size_type i = 0; i < N; ++i) delta[i] *= CSCALE;
+                }
+
+                DEL = 0.0;
+                for (size_type i = 0; i < N; ++i) {
+                    DEL += (delta[i] * s.ewt[i]) * (delta[i] * s.ewt[i]);
+                }
+                DEL = std::sqrt(DEL / static_cast<Real>(N));
+                VODE_DBG("dvnlsd: M=" << M << " DEL=" << DEL);
+
+                for (size_type i = 0; i < N; ++i) s.acor[i] += delta[i];
+                for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1) + s.acor[i];
+                trace_deuterium_state("corrector_delta", s, s.y, &delta, DEL);
+
+                if (M != 0) s.CRATE = std::max(CRDOWN * s.CRATE, DEL / DELP);
+
+                const Real DCON = DEL * std::min(1.0, s.CRATE) / s.TQ(4);
+                VODE_DBG("dvnlsd: DCON=" << DCON << " CRATE=" << s.CRATE << " RL1=" << s.RL1 << " H=" << s.H);
+                if (DCON <= 1.0) {
+                    converged = true;
+                    break;
+                }
+
+                M += 1;
+                if (M == MAXCOR) break;
+                if (M >= 2 && DEL > RDIV * DELP) break;
+
+                DELP = DEL;
+                rhs_state(s.tn, s, s.savf);
+                s.n_rhs++;
+            }
+
+            if (converged) break;
+
+            VODE_DBG("dvnlsd: no convergence; JCUR=" << int(s.JCUR));
+            if (s.JCUR == 1) {
+                NFLAG = -1;
+                s.ICF = 2;
+                s.IPUP = 1;
+                return ACNRM;
+            }
+
+            s.ICF = 1;
+            s.IPUP = 1;
         }
 
-        if (!converged) {
-            VODE_DBG("dvnlsd: no convergence; JCUR=" << int(s.JCUR) << ", ICF set -> retry");
-            if (s.JCUR == 1) { NFLAG = -1; s.ICF = 2; s.IPUP = 1; return 1e10; }
-            s.ICF = 1; s.IPUP = 1; // retry with new Jacobian
-            NFLAG = -2; // signal retry
-            return 1e10;
-        }
+        NFLAG = 0;
+        s.JCUR = 0;
+        s.ICF = 0;
 
-        // Success
-        NFLAG = 0; s.JCUR = 0; s.ICF = 0;
-        if (s.n_step == 1 && !s.debug_dump_done) { s.debug_dump_done = true; }
-        if (M != 0) {
+        if (M == 0) {
+            ACNRM = DEL;
+        } else {
             ACNRM = 0.0;
-            for (size_type i = 0; i < N; ++i) ACNRM += (s.acor[i] * s.ewt[i]) * (s.acor[i] * s.ewt[i]);
+            for (size_type i = 0; i < N; ++i) {
+                ACNRM += (s.acor[i] * s.ewt[i]) * (s.acor[i] * s.ewt[i]);
+            }
             ACNRM = std::sqrt(ACNRM / static_cast<Real>(N));
         }
+
         return ACNRM;
     }
 
     // dvjust: adjust YH on order change
-    static void dvjust(int IORD, State& s) {
+    static INTEGRATORS_HOST_DEVICE void dvjust(int IORD, State& s) {
         if ((s.NQ == 2) && (IORD != 1)) return;
         const int NQM1 = s.NQ - 1; const int NQM2 = s.NQ - 2;
         if (IORD != 1) {
@@ -415,7 +486,7 @@ private:
     }
 
     // dvhin: compute initial step size H0
-    static void dvhin(State& s, Real& H0, int& NITER, int& IER) {
+    static INTEGRATORS_HOST_DEVICE void dvhin(State& s, Real& H0, int& NITER, int& IER) {
         constexpr Real PT1 = 0.1;
         NITER = 0; IER = 0; H0 = 0.0;
         const Real TDIST = std::abs(s.tout - s.t);
@@ -424,9 +495,11 @@ private:
         const Real HLB = 100.0 * TROUND;
         Real HUB = PT1 * TDIST;
         for (size_type i = 0; i < N; ++i) {
-            const Real DELYI = PT1 * std::abs(s.YH(static_cast<int>(i+1),1)) + s.atol;
+            const Real DELYI = PT1 * std::abs(s.YH(static_cast<int>(i+1),1)) + atol_for(s, i);
             const Real AFI = std::abs(s.YH(static_cast<int>(i+1),2));
-            if (AFI * HUB > DELYI) HUB = DELYI / (AFI + 1e-300);
+            if (AFI * HUB > DELYI) {
+                HUB = DELYI / (AFI + 1e-300);
+            }
         }
         int iter = 0; Real HG = std::sqrt(HLB * HUB);
         if (HUB < HLB) { H0 = HG; NITER = iter; return; }
@@ -435,9 +508,13 @@ private:
             const Real H = std::copysign(HG, s.tout - s.t);
             for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1) + H * s.YH(static_cast<int>(i+1),2);
             const Real t1 = s.t + H;
-            std::array<Real,N> f{}; rhs(t1, s.y, f);
+            std::array<Real,N> f{}; rhs_state(t1, s, f);
             for (size_type i = 0; i < N; ++i) s.acor[i] = (f[i] - s.YH(static_cast<int>(i+1),2)) / H;
-            Real YDDNRM = 0.0; for (size_type i = 0; i < N; ++i) YDDNRM += (s.acor[i] * s.ewt[i]) * (s.acor[i] * s.ewt[i]);
+            Real YDDNRM = 0.0;
+            for (size_type i = 0; i < N; ++i) {
+                const Real weighted = s.acor[i] * s.ewt[i];
+                YDDNRM += weighted * weighted;
+            }
             YDDNRM = std::sqrt(YDDNRM / static_cast<Real>(N));
             if (YDDNRM * HUB * HUB > 2.0) hnew = std::sqrt(2.0 / YDDNRM); else hnew = std::sqrt(HG * HUB);
             iter += 1;
@@ -452,7 +529,9 @@ private:
     }
 
     // One dvstep; returns kflag (0 success, -1 dt underflow, -2 corrector failure)
-    static int dvstep(State& s) {
+    static INTEGRATORS_HOST_DEVICE int dvstep(State& s) {
+        constexpr int KFC = -3;
+        constexpr int KFH = -7;
         constexpr int MXNCF = 10;
         constexpr Real ADDON = 1.0e-6;
         constexpr Real BIAS1 = 6.0;
@@ -466,41 +545,41 @@ private:
         constexpr Real ONEPSM = 1.00001;
         constexpr Real THRESH = 1.5;
 
-        Real TOLD = s.tn;
+        Real DSM = 0.0;
+        int kflag = 0;
+        const Real TOLD = s.tn;
         int NCF = 0;
-        s.JCUR = 0; int NFLAG = 0;
-        bool raised_this_step = false;
+        s.JCUR = 0;
+        int NFLAG = 0;
 
-        // Save y before solve (not used for constraints here)
-        while (true) {
-            // Apply any pending order and/or step-size change before each attempt.
-            // Order changes must apply even when ETA == 1 (no step-size change),
-            // to match DVODE behavior. Step-size scaling applies only when NEWH != 0.
-            const int prev_NQ = s.NQ;
-            if (s.NEWH != 0 || s.NEWQ != s.NQ) {
-                // Apply order change first if requested
-                if (s.NEWQ < s.NQ) { dvjust(-1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
-                else if (s.NEWQ > s.NQ) { dvjust(1, s); s.NQ = s.NEWQ; s.L = static_cast<short>(s.NQ + 1); s.NQWAIT = s.L; }
-
-                // Apply step-size change if scheduled
-                if (s.NEWH != 0) {
-                    // Rescale Nordsieck history by powers of ETA (Pascal transform)
-                    Real Rpre = 1.0;
-                    for (int j = 2; j <= s.L; ++j) {
-                        Rpre *= s.ETA;
-                        for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= Rpre;
-                    }
-                    // Apply the step-size change
-                    s.H = s.H * s.ETA;
-                    s.HSCAL = s.H;
-                    s.RC *= s.ETA;
-                    s.NEWH = 0; // consumed
-                }
-                raised_this_step = (s.NQ > prev_NQ);
-            } else {
-                raised_this_step = false;
+        if (s.NEWH != 0) {
+            if (s.NEWQ < s.NQ) {
+                dvjust(-1, s);
+                s.NQ = s.NEWQ;
+                s.L = static_cast<short>(s.NQ + 1);
+                s.NQWAIT = s.L;
+            } else if (s.NEWQ > s.NQ) {
+                dvjust(1, s);
+                s.NQ = s.NEWQ;
+                s.L = static_cast<short>(s.NQ + 1);
+                s.NQWAIT = s.L;
             }
 
+            Real R = 1.0;
+            for (int j = 2; j <= s.L; ++j) {
+                R *= s.ETA;
+                for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= R;
+            }
+
+            s.H = s.HSCAL * s.ETA;
+            s.HSCAL = s.H;
+            s.RC *= s.ETA;
+        }
+
+        std::array<Real, N> y_save{};
+        for (size_type i = 0; i < N; ++i) y_save[i] = s.y[i];
+
+        while (true) {
             s.tn += s.H;
             VODE_DBG("dvstep: predict t->" << s.tn << " H=" << s.H << " NQ=" << s.NQ);
             advance_nordsieck(s);
@@ -508,7 +587,6 @@ private:
             s.RL1 = 1.0 / s.EL(2);
             s.RC *= (s.RL1 / s.PRL1);
             s.PRL1 = s.RL1;
-            // No derivative refresh here; DVODE proceeds with predicted history
 
             VODE_DBG(
                 "PRE tn=" << s.tn <<
@@ -533,42 +611,74 @@ private:
             s.acnrm_last = ACNRM; // Save corrector norm for ORDER_DECIDE
             if (NFLAG != 0) {
                 VODE_DBG("dvstep: corrector failed; ACNRM~" << ACNRM << " NCF=" << NCF);
-                // Nonlinear solver failed; retract and cut H
-                NCF += 1; s.ETAMAX = 1.0; s.tn = TOLD; retract_nordsieck(s);
-                if (std::abs(s.H) <= HMIN * ONEPSM) return -2; // convergence failure
+                NCF += 1;
+                s.ETAMAX = 1.0;
+                s.tn = TOLD;
+                retract_nordsieck(s);
+                if (std::abs(s.H) <= HMIN * ONEPSM) return -2;
                 if (NCF == MXNCF) return -2;
-                s.ETA = ETACF; s.ETA = std::max(s.ETA, (HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0));
-                Real R = 1.0; for (int j = 2; j <= s.L; ++j) { R *= s.ETA; for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= R; }
-                s.H = s.HSCAL * s.ETA; s.HSCAL = s.H; s.RC *= s.ETA;
-                // Refresh derivative history for new H to avoid large predictor defect
-                for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1);
-                rhs(s.tn, s.y, s.savf); s.n_rhs++;
-                for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1), 2) = s.H * s.savf[i];
+
+                s.ETA = ETACF;
+                s.ETA = std::max(s.ETA, (HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0));
+                Real R = 1.0;
+                for (int j = 2; j <= s.L; ++j) {
+                    R *= s.ETA;
+                    for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= R;
+                }
+                s.H = s.HSCAL * s.ETA;
+                s.HSCAL = s.H;
+                s.RC *= s.ETA;
                 VODE_DBG("dvstep: reduce H by ETA=" << s.ETA << " -> H=" << s.H);
                 continue;
             }
 
-            // Error test
-            const Real DSM = ACNRM / s.TQ(2);
-            if (s.n_step == 1) {
-                if constexpr (N >= 3) {
-                    VODE_DBG("ACCEPT_DEBUG ACOR=" << s.acor[0] << "," << s.acor[1] << "," << s.acor[2]
-                             << " TQ2=" << s.TQ(2) << " DSM=" << DSM << " RC=" << s.RC << " CRATE=" << s.CRATE
-                             << " NQWAIT=" << int(s.NQWAIT));
+            bool valid_update = true;
+            const int constrained_components = std::min<int>(s.constrained_components, static_cast<int>(N));
+            for (int i = 0; i < constrained_components; ++i) {
+                const auto idx = static_cast<size_type>(i);
+                const Real reject_threshold = s.reject_change_buffer * atol_for(s, idx);
+                if (std::abs(y_save[idx]) > reject_threshold &&
+                    std::abs(s.y[idx]) > reject_threshold &&
+                    (std::abs(s.y[idx]) > s.increase_change_factor * std::abs(y_save[idx]) ||
+                     std::abs(s.y[idx]) < s.decrease_change_factor * std::abs(y_save[idx]))) {
+                    valid_update = false;
+                    break;
+                }
+
+                if (s.y[idx] < -s.species_failure_tolerance) {
+                    valid_update = false;
+                    break;
+                }
+
+                if (s.enforce_component_ceiling &&
+                    s.y[idx] > s.component_ceiling + s.species_failure_tolerance) {
+                    valid_update = false;
+                    break;
                 }
             }
+
+            DSM = ACNRM / s.TQ(2);
             VODE_DBG("POST ACNRM=" << ACNRM << " DSM=" << DSM << " tq2=" << s.TQ(2)
                 << " JCUR=" << int(s.JCUR) << " ICF=" << int(s.ICF) << " CRATE=" << s.CRATE << " RC=" << s.RC);
-            if (DSM <= 1.0) {
+            if (DSM <= 1.0 && valid_update) {
                 VODE_DBG("dvstep: accept step; n_step=" << s.n_step+1);
                 VODE_DBG("ACCEPT t=" << s.tn << " hu=" << s.H << " nq=" << int(s.NQ));
-                // Successful step; update histories
-                int L = s.L;
+                kflag = 0;
                 s.n_step += 1; s.err_fails = 0;
-                for (int iback = 1; iback <= s.NQ; ++iback) { int i = L - iback; s.TAU(i+1) = s.TAU(i); }
+                for (int iback = 1; iback <= s.NQ; ++iback) {
+                    const int i = s.L - iback;
+                    s.TAU(i+1) = s.TAU(i);
+                }
                 s.TAU(1) = s.H;
                 for (int j = 1; j <= s.L; ++j) {
                     for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) += s.EL(j) * s.acor[static_cast<size_type>(i-1)];
+                }
+                if (s.trace_deuterium_components) {
+                    std::array<Real, N> accepted_y{};
+                    for (size_type i = 0; i < N; ++i) {
+                        accepted_y[i] = s.YH(static_cast<int>(i + 1), 1);
+                    }
+                    trace_deuterium_state("accept", s, accepted_y, &s.savf, ACNRM);
                 }
                 s.NQWAIT -= 1;
                 VODE_DBG("ACCEPT_POST_PRE NQWAIT=" << int(s.NQWAIT) << " L=" << int(s.L)
@@ -585,75 +695,79 @@ private:
 
                 if (s.ETAMAX != 1.0) break;
                 if (s.NQWAIT < 2) s.NQWAIT = 2;
-                s.NEWQ = s.NQ; s.NEWH = 0; s.ETA = 1.0; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2;
+                s.NEWQ = s.NQ;
+                s.NEWH = 0;
+                s.ETA = 1.0;
+                s.ETAMAX = ETAMX3;
+                if (s.n_step <= 10) s.ETAMAX = ETAMX2;
                 const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R;
-                return 0;
+                return kflag;
             }
 
-            // Error test failed; retract and reduce H
-            s.tn = TOLD; NFLAG = -2; retract_nordsieck(s);
-            if (std::abs(s.H) <= HMIN * ONEPSM) return -1; // dt underflow
+            kflag -= 1;
+            s.n_error_fails += 1;
+            NFLAG = -2;
+            s.tn = TOLD;
+            retract_nordsieck(s);
+            if (std::abs(s.H) <= HMIN * ONEPSM) return -1;
             s.ETAMAX = 1.0;
-            s.err_fails += 1;
-            Real ETANEW = 1.0 / (std::pow(BIAS2 * DSM, 1.0 / static_cast<Real>(s.L)) + ADDON);
 
-            if (s.NQWAIT == 1) {
-                s.NEWQ = s.NQ; s.NQWAIT = 2; Real ETAM = 1.0 / (std::pow(BIAS2 * DSM, 1.0 / static_cast<Real>(s.L)) + ADDON);
-                if (ETAM < ETANEW) ETANEW = ETAM;
+            if (kflag > KFC) {
+                const Real FLOTL = static_cast<Real>(s.L);
+                s.ETA = 1.0 / (std::pow(BIAS2 * DSM, 1.0 / FLOTL) + ADDON);
+                s.ETA = std::max({s.ETA, (HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0), ETAMIN});
+                if ((kflag <= -2) && (s.ETA > ETAMXF)) s.ETA = ETAMXF;
+
+                Real R = 1.0;
+                for (int j = 2; j <= s.L; ++j) {
+                    R *= s.ETA;
+                    for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= R;
+                }
+
+                s.H = s.HSCAL * s.ETA;
+                s.HSCAL = s.H;
+                s.RC *= s.ETA;
+                VODE_DBG("REJECT_APPLY ETA=" << s.ETA << " -> H=" << s.H << " RC=" << s.RC);
+                continue;
             }
 
-            VODE_DBG("REJECT DSM=" << DSM << " ETANEW_init=" << ETANEW
-                << " raised_this_step=" << (raised_this_step?1:0)
-                << " NQWAIT=" << int(s.NQWAIT) << " NEWQ=" << int(s.NEWQ));
+            if (kflag == KFH) return -1;
 
-            // If we just raised order and failed, revert order by one on retry
-            if (raised_this_step && s.NQ > 1) {
-                VODE_DBG("dvstep: rejection after order increase; revert order to " << (s.NQ - 1));
-                s.NEWQ = static_cast<short>(s.NQ - 1);
-                s.NEWH = 1;
-            }
-
-            // DVODE: after 3 or more consecutive error test failures, drop order
-            if (s.err_fails >= 3 && s.NQ > 1) {
-                VODE_DBG("dvstep: repeated error test failures=" << s.err_fails << ", dropping order to " << (s.NQ - 1));
-                s.NEWQ = static_cast<short>(s.NQ - 1);
-                s.NEWH = 1;
-                s.NQWAIT = s.L;
-                // Force a modest cut to H
+            if (s.NQ != 1) {
                 s.ETA = std::max(ETAMIN, (HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0));
+                dvjust(-1, s);
+                s.L = s.NQ;
+                s.NQ -= 1;
+                s.NQWAIT = s.L;
+
+                Real R = 1.0;
+                for (int j = 2; j <= s.L; ++j) {
+                    R *= s.ETA;
+                    for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), j) *= R;
+                }
+
+                s.H = s.HSCAL * s.ETA;
+                s.HSCAL = s.H;
+                s.RC *= s.ETA;
+                continue;
             }
 
-            // DVODE: choose ETANEW subject to ETAMIN and HMIN
-            Real eta_candidate = std::max(ETAMIN, ETANEW);
-            // Honor HMIN
-            eta_candidate = std::max((HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0), eta_candidate);
-            s.ETA = eta_candidate;
-            if (std::abs(s.H) * s.HMXI * s.ETA > 1.0) s.ETA = 1.0 / (std::abs(s.H) * s.HMXI);
-            if (s.ETA == 1.0) s.ETA = ETAMIN;
-
-            s.H = s.HSCAL * s.ETA; s.HSCAL = s.H; s.RC *= s.ETA;
-            // Refresh derivative history for new H to avoid large predictor defect
-            for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), 1);
-            rhs(s.tn, s.y, s.savf); s.n_rhs++;
+            s.ETA = std::max(ETAMIN, (HMIN > 0.0 ? HMIN / std::abs(s.H) : 0.0));
+            s.H *= s.ETA;
+            s.HSCAL = s.H;
+            s.TAU(1) = s.H;
+            rhs_state(s.tn, s, s.savf);
+            s.n_rhs++;
             for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1), 2) = s.H * s.savf[i];
-            VODE_DBG("REJECT_APPLY ETA=" << s.ETA << " -> H=" << s.H << " RC=" << s.RC);
-            continue;
+            s.NQWAIT = 10;
         }
 
         // Consider order/timestep change (align with DVODE)
         bool already_set_eta = false;
         const Real FLOTL = static_cast<Real>(s.L);
-        // Use the corrector's ACNRM from this step
-        const Real DSM = s.acnrm_last / s.TQ(2);
-        const Real ETAQ_eff = 1.0 / (std::pow(BIAS2 * DSM, 1.0 / FLOTL) + ADDON);
+        const Real ETAQ = 1.0 / (std::pow(BIAS2 * DSM, 1.0 / FLOTL) + ADDON);
 
-        if (s.NQWAIT != 0) {
-            // Only allow same-order step change when NQWAIT != 0
-            s.ETA = ETAQ_eff;
-            s.NEWQ = s.NQ;
-            already_set_eta = true;
-        } else {
-            // NQWAIT == 0: consider q-1 and q+1
+        if (s.NQWAIT == 0) {
             s.NQWAIT = 2;
             Real ETAQM1 = 0.0;
             if (s.NQ != 1) {
@@ -672,49 +786,56 @@ private:
                     << " H=" << s.H << " TAU2=" << s.TAU(2) << " L=" << int(s.L)
                     << " CNQUOT=" << CNQUOT << " DUP=" << DUP << " ETAQP1=" << ETAQP1);
             }
-            VODE_DBG("ORDER_DECIDE DSM=" << DSM << " ETAQ_eff=" << ETAQ_eff
+            VODE_DBG("ORDER_DECIDE DSM=" << DSM << " ETAQ=" << ETAQ
                 << " ETAQM1=" << ETAQM1 << " ETAQP1=" << ETAQP1);
-            if (ETAQ_eff < ETAQP1) {
+            if (ETAQ < ETAQP1) {
                 if (ETAQP1 > ETAQM1) { s.ETA = ETAQP1; s.NEWQ = static_cast<short>(s.NQ + 1); for (size_type i = 1; i <= N; ++i) s.YH(static_cast<int>(i), VODE_LMAX) = s.acor[static_cast<size_type>(i-1)]; }
                 else { s.ETA = ETAQM1; s.NEWQ = static_cast<short>(s.NQ - 1); }
                 already_set_eta = true;
             }
-            if (ETAQ_eff < ETAQM1 && !already_set_eta) { s.ETA = ETAQM1; s.NEWQ = static_cast<short>(s.NQ - 1); already_set_eta = true; }
+            if (ETAQ < ETAQM1 && !already_set_eta) { s.ETA = ETAQM1; s.NEWQ = static_cast<short>(s.NQ - 1); already_set_eta = true; }
         }
-        if (!already_set_eta) { s.ETA = ETAQ_eff; s.NEWQ = s.NQ; }
+        if (!already_set_eta) { s.ETA = ETAQ; s.NEWQ = s.NQ; }
 
         if (s.ETA >= THRESH && s.ETAMAX != 1.0) {
             s.ETA = std::min(s.ETA, s.ETAMAX);
-            if (std::abs(s.H) * s.HMXI * s.ETA > 1.0) s.ETA = 1.0 / (std::abs(s.H) * s.HMXI * s.ETA);
+            s.ETA = s.ETA / std::max(1.0, std::abs(s.H) * s.HMXI * s.ETA);
             s.NEWH = 1; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2;
-            const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; return 0;
+            const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; return kflag;
         }
-        // Keep selected NEWQ (if different from NQ) but do not change step size (ETA -> 1).
         VODE_DBG("ORDER_APPLY ETA=" << s.ETA << " NEWQ=" << int(s.NEWQ) << " THRESH=" << THRESH << " ETAMAX=" << s.ETAMAX);
+        s.NEWQ = s.NQ;
         s.NEWH = 0; s.ETA = 1.0; s.ETAMAX = ETAMX3; if (s.n_step <= 10) s.ETAMAX = ETAMX2;
         { const Real R = 1.0 / s.TQ(2); for (size_type i = 0; i < N; ++i) s.acor[i] *= R; }
-        return 0;
+        return kflag;
     }
 
 public:
-    IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
+    INTEGRATORS_HOST_DEVICE IntegratorResult integrate(ProblemState& /*problem_state*/, State& s) {
         if (s.tout == s.t) return IntegratorResult::SUCCESS;
 
         // Initialize
-        s.tn = s.t; s.n_step = 0; s.n_jac = 0; s.NSLJ = 0;
+        s.tn = s.t; s.n_step = 0; s.n_jac = 0; s.n_decomp = 0; s.n_solve = 0;
+        s.n_error_fails = 0; s.NSLJ = 0;
 
         // Initial RHS and load yh(:,2)
-        rhs(s.t, s.y, s.savf); for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),2) = s.savf[i]; s.n_rhs = 1;
+        rhs_state(s.t, s, s.savf);
+        for (size_type i = 0; i < N; ++i) {
+            s.YH(static_cast<int>(i+1),2) = s.savf[i];
+        }
+        s.n_rhs = 1;
         // Load initial values yh(:,1)
         for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),1) = s.y[i];
+        trace_deuterium_state("init_rhs", s, s.y, &s.savf, 0.0);
 
         // Load and invert error weights; temporarily set H=1
-        s.NQ = 1; s.H = 1.0; for (size_type i = 0; i < N; ++i) { s.ewt[i] = s.rtol * std::abs(s.YH(static_cast<int>(i+1),1)) + s.atol; s.ewt[i] = 1.0 / s.ewt[i]; }
+        s.NQ = 1; s.H = 1.0; update_error_weights(s);
 
         // Initial step size
         Real H0 = 0.0; int NITER = 0; int IER = 0; dvhin(s, H0, NITER, IER); s.n_rhs += NITER;
         if (IER != 0) return IntegratorResult::DT_UNDERFLOW;
         s.H = H0; for (size_type i = 0; i < N; ++i) s.YH(static_cast<int>(i+1),2) *= s.H;
+        trace_deuterium_state("initial_h", s, s.y, nullptr, H0);
 
         // Initialize method/order and related vars (match DVODE semantics)
         s.NQ = 1; s.NEWQ = 1; s.L = 2; s.TAU(1) = s.H; s.PRL1 = 1.0; s.RC = 0.0;
@@ -729,7 +850,7 @@ public:
                     for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1),1);
                     s.t = s.tn; return IntegratorResult::TOO_MANY_STEPS;
                 }
-                for (size_type i = 0; i < N; ++i) { s.ewt[i] = s.rtol * std::abs(s.YH(static_cast<int>(i+1),1)) + s.atol; s.ewt[i] = 1.0 / s.ewt[i]; }
+                update_error_weights(s);
             } else { skip_loop_start = false; }
 
             // TOLSF: too much accuracy requested?
@@ -755,6 +876,7 @@ public:
                 const int j = s.NQ - jb;
                 for (size_type i = 0; i < N; ++i) s.y[i] = s.YH(static_cast<int>(i+1), j+1) + S * s.y[i];
             }
+            trace_deuterium_state("final_interp", s, s.y, nullptr, S);
             s.t = s.tout; return IntegratorResult::SUCCESS;
         }
     }

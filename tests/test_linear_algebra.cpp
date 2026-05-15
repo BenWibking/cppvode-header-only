@@ -88,6 +88,28 @@ void test_matrix_solve_regression() {
     std::cout << "  LU solve regression: PASSED\n";
 }
 
+void test_factor_solve() {
+    std::cout << "Testing one-shot LU factor/solve...\n";
+
+    std::array<std::array<Real, 2>, 2> A = {{
+        {{0.0, 2.0}},
+        {{1.0, 1.0}}
+    }};
+    std::array<Real, 2> b = {4.0, 3.0};
+    std::array<int, 2> pivot;
+
+    int info = linalg::lu_factor_solve<2, true>(A, pivot, b);
+    assert(info == 0);
+    (void)info;
+
+    const Real tol = 1.e-12;
+    assert(std::abs(b[0] - 1.0) < tol);
+    assert(std::abs(b[1] - 2.0) < tol);
+    (void)tol;
+
+    std::cout << "  One-shot LU factor/solve: PASSED\n";
+}
+
 void test_vector_norms() {
     std::cout << "Testing vector norms...\n";
     
@@ -131,6 +153,7 @@ int main() {
     test_lu_decomposition();
     test_matrix_solve();
     test_matrix_solve_regression();
+    test_factor_solve();
     test_vector_norms();
     test_matrix_vector();
     

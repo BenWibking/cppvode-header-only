@@ -10,6 +10,14 @@
 #include <algorithm>
 #include <type_traits>
 
+#ifndef INTEGRATORS_HOST_DEVICE
+#if defined(__CUDACC__) || defined(__HIPCC__)
+#define INTEGRATORS_HOST_DEVICE __device__ __forceinline__
+#else
+#define INTEGRATORS_HOST_DEVICE inline
+#endif
+#endif
+
 namespace integrators {
 
 // Basic real type - can be changed to double/long double as needed
@@ -64,6 +72,28 @@ struct problem_jacobian<Problem, N, std::void_t<typename Problem::jacobian_type>
     static constexpr bool available = true;
 };
 
+template<typename Problem, typename = void>
+struct problem_rhs_aliasing {
+    static constexpr bool available = false;
+};
+
+template<typename Problem>
+struct problem_rhs_aliasing<Problem, std::void_t<decltype(Problem::rhs_allows_input_output_alias)>> {
+    static constexpr bool available = Problem::rhs_allows_input_output_alias;
+};
+
+template<typename Problem, typename = void>
+struct problem_rosenbrock_static_tolerances {
+    static constexpr bool available = false;
+};
+
+template<typename Problem>
+struct problem_rosenbrock_static_tolerances<Problem, std::void_t<decltype(
+    Problem::rosenbrock_rtol(std::declval<size_type>())),
+    decltype(Problem::rosenbrock_atol(std::declval<size_type>()))>> {
+    static constexpr bool available = true;
+};
+
 } // namespace detail
 
 // Base traits for problem definition
@@ -76,6 +106,10 @@ struct ProblemTraits {
     using preconditioner_type = typename detail::problem_preconditioner<Problem>::type;
     static constexpr bool has_custom_preconditioner = detail::problem_preconditioner<Problem>::available;
     static constexpr bool has_analytic_jacobian = detail::problem_jacobian<Problem, neqs>::available;
+    static constexpr bool rhs_allows_input_output_alias =
+        detail::problem_rhs_aliasing<Problem>::available;
+    static constexpr bool has_rosenbrock_static_tolerances =
+        detail::problem_rosenbrock_static_tolerances<Problem>::available;
 };
 
 // Base integrator state
@@ -88,6 +122,9 @@ struct IntegratorState {
     // Tolerances
     Real rtol{1.e-6};
     Real atol{1.e-12};
+    bool use_vector_tolerances{false};
+    std::array<Real, N> rtol_vec{};
+    std::array<Real, N> atol_vec{};
     
     // Statistics
     int n_step{0};
@@ -98,8 +135,15 @@ struct IntegratorState {
     std::array<Real, N> y{};
     
     bool jacobian_analytic{false};
-    // Debug flag
-    bool debug_dump_done{false};
+    int constrained_components{0};
+    Real species_failure_tolerance{1.e-2};
+    Real reject_change_buffer{0.0};
+    Real increase_change_factor{4.0};
+    Real decrease_change_factor{0.25};
+    bool enforce_component_ceiling{false};
+    Real component_ceiling{1.0};
+    bool clean_constrained_components{false};
+    Real component_floor{0.0};
 };
 
 // RHS/Jacobian concepts (available when compiling with C++20 concepts support).
@@ -135,22 +179,12 @@ constexpr Real UROUND = std::numeric_limits<Real>::epsilon();
 
 template<int N>
 constexpr Real powi(Real x) {
-    if constexpr (N == 0) return 1.0;
-    if constexpr (N == 1) return x;
-    if constexpr (N == 2) return x * x;
-    if constexpr (N == 3) return x * x * x;
     if constexpr (N < 0) return 1.0 / powi<-N>(x);
-    else {
-        Real result = 1.0;
-        Real base = x;
-        int exp = N;
-        while (exp > 0) {
-            if (exp & 1) result *= base;
-            base *= base;
-            exp >>= 1;
-        }
-        return result;
-    }
+    else if constexpr (N == 0) return 1.0;
+    else if constexpr (N == 1) return x;
+    else if constexpr (N == 2) return x * x;
+    else if constexpr (N % 2 == 0) return powi<2>(powi<N / 2>(x));
+    else return x * powi<N - 1>(x);
 }
 
 template<typename T>

@@ -1,9 +1,10 @@
 # cppvode-header-only
 
-A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides two robust integrators suitable for scientific computing applications:
+A modern C++20 header-only library containing ODE integrators extracted from the AMReX Microphysics framework. This library provides robust integrators suitable for scientific computing applications:
 
 - **VODE**: Variable-coefficient ODE solver using Backward Differentiation Formulas (BDF)
 - **Backward Euler**: Simple implicit first-order method
+- **YASS**: Khokhlov's non-iterative first-order stiff method using one RHS/Jacobian point per step
 
 ## Features
 
@@ -65,14 +66,15 @@ build/examples/robertson
 Useful options:
 - `-DBUILD_TESTS=ON` and `-DBUILD_EXAMPLES=ON` (both ON by default)
 - `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE internal logs
+- `-DINTEGRATORS_USE_CUSOLVERDX=ON` to use cuSolverDx for CUDA device LU factorization/solve. Requires CUDA, CMake 3.18+, and a MathDx install visible to `find_package(mathdx CONFIG)`, for example via `-Dmathdx_ROOT=/path/to/nvidia/mathdx/YY.MM`. CUDA targets using this path also need `CUDA_SEPARABLE_COMPILATION` and `INTERPROCEDURAL_OPTIMIZATION` enabled.
 - `-DWARNINGS_AS_ERRORS=ON` to treat C/C++ warnings as errors (matches CI; excludes CUDA/Fortran)
 - Debug builds enable AddressSanitizer: `-DCMAKE_BUILD_TYPE=Debug`
 
 ## Development Tips
 
 - Compiler selection: pass `-DCMAKE_CXX_COMPILER=/path/to/clang++` (or `g++`) to `cmake` or set `CXX` in the environment.
-- CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). The CUDA test target `test_vode_gpu` builds only when CUDA is available.
-- LAPACK support removed: the library always uses the built-in LU/solve.
+- CUDA tests: CUDA is enabled automatically if a CUDA compiler is detected. To force-enable, pass `-DCMAKE_CUDA_COMPILER=nvcc` (or a compatible Clang CUDA). With `-DBUILD_CUDA_TESTS=ON`, the regular integrator tests are replaced by the CUDA target `test_gpu_all`, which launches integrator and linear algebra checks from device kernels.
+- LAPACK support removed: CPU builds always use the built-in LU/solve. CUDA device code can opt into cuSolverDx with `-DINTEGRATORS_USE_CUSOLVERDX=ON`.
 - Reproducibility: record `-DCMAKE_CXX_COMPILER` and `-DCMAKE_BUILD_TYPE` with results. Use `-DINTEGRATORS_VODE_DEBUG=ON` for verbose VODE traces in Debug builds.
 
 ## Problem Interface Requirements
@@ -101,21 +103,23 @@ include/integrators/          # Header-only library (public API)
 ├── integrator_types.hpp      # Core types, traits, states
 ├── linear_algebra.hpp        # Linear algebra utilities (LU/solve, helpers)
 ├── backward_euler.hpp        # Backward Euler integrator
+├── yass.hpp                  # Khokhlov YASS integrator
 └── vode.hpp                  # VODE (BDF) integrator
 
 examples/                     # Example programs
-├── simple_ode.cpp            # dy/dt = -y demo (BE + VODE)
+├── simple_ode.cpp            # dy/dt = -y demo (BE + YASS + VODE)
 ├── robertson.cpp             # Robertson stiff kinetics (VODE)
 └── robertson_dvode.f90       # Fortran driver to compare with DVODE
 
 tests/                        # Executable tests (run via ctest)
 ├── test_linear_algebra.cpp   # Linear algebra unit tests
 ├── test_convergence.cpp      # BE and VODE convergence/error-control
+├── test_yass.cpp             # YASS step, invariant, and fallback tests
 ├── test_vode_stiff_decay.cpp # Stiff decay regression
 ├── test_vode_hires.cpp       # HIRES stiff benchmark
 ├── test_vode_nelson.cpp      # Nelson astrochemistry check
 ├── test_vode_robertson_strict.cpp # Strict Robertson tolerances
-└── test_vode_gpu.cu          # Optional CUDA test (if CUDA enabled)
+└── test_gpu_all.cu           # CUDA device-kernel test suite (if enabled)
 
 extern/                       # External references for comparisons
 └── dvode.f                   # Original DVODE Fortran source (reference)
