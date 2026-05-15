@@ -33,3 +33,11 @@
 - Avoid UB in numerical code; prefer checked bounds when feasible.
 - Reproducibility: document `CMAKE_CXX_COMPILER` and build type used.
 - Diagnostics: use `-DINTEGRATORS_VODE_DEBUG=ON` and Debug builds to trace failures.
+
+## Command execution
+When running project commands, tests, Python scripts, training, benchmarks, or builds,
+always use:
+
+  jobsh '<command>'
+
+Do not run compute-heavy commands directly on the login node.

@@ -26,6 +26,8 @@ if(INTEGRATORS_CUDA_ENABLED)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(primordial_chem PRIVATE -ffp-contract=off)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
+    target_compile_options(primordial_chem PRIVATE -Mnovect -Mnoautoinline -Mnofma -Kieee)
 endif()
 
 # Add examples as tests
