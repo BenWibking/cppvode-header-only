@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// ABOUTME: Robertson chemical kinetics problem example using the C++ RODAS integrator
+// ABOUTME: Robertson chemical kinetics problem example using the C++ Rosenbrock integrator
 #include <array>
 #include <cmath>
 #include <iomanip>
@@ -7,7 +7,7 @@
 
 #include <integrators/integrators.hpp>
 
-struct RobertsonRODAS {
+struct RobertsonRosenbrock {
     static constexpr integrators::size_type neqs = 3;
 
     using state_type = std::array<integrators::Real, neqs>;
@@ -44,8 +44,9 @@ struct RobertsonRODAS {
 int main() {
     using namespace integrators;
 
-    auto integrator = RODAS<RobertsonRODAS>{};
-    auto state = RODASState<3>{};
+    using Integrator = Rosenbrock<RobertsonRosenbrock>;
+    auto integrator = Integrator{};
+    auto state = Integrator::State{};
     state.jacobian_analytic = true;
     state.autonomous = true;
     state.t = 0.0;
@@ -55,16 +56,16 @@ int main() {
     state.atol = 1.e-10;
     state.y = {1.0, 0.0, 0.0};
 
-    auto problem_state = RobertsonRODAS::state_type{1.0, 0.0, 0.0};
+    auto problem_state = RobertsonRosenbrock::state_type{1.0, 0.0, 0.0};
     const auto result = integrator.integrate(problem_state, state);
     if (result != IntegratorResult::SUCCESS) {
-        std::cerr << "RODAS failed with code " << static_cast<int>(result) << "\n";
+        std::cerr << "ROS2S failed with code " << static_cast<int>(result) << "\n";
         return 1;
     }
 
     const auto total = state.y[0] + state.y[1] + state.y[2];
     std::cout << std::setprecision(17);
-    std::cout << "C++ RODAS Robertson final state at t=40\n";
+    std::cout << "C++ ROS2S Robertson final state at t=40\n";
     std::cout << "y = " << state.y[0] << " " << state.y[1] << " " << state.y[2] << "\n";
     std::cout << "conservation_error = " << std::abs(total - 1.0) << "\n";
     std::cout << "steps = " << state.n_step << "\n";

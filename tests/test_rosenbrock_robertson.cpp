@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// ABOUTME: RODAS regression test on the stiff Robertson problem
+// ABOUTME: ROS2S regression test on the stiff Robertson problem
 #include <array>
 #include <cmath>
 #include <iomanip>
@@ -8,7 +8,7 @@
 
 using namespace integrators;
 
-struct RobertsonRODAS {
+struct RobertsonRosenbrock {
     static constexpr size_type neqs = 3;
     using state_type = std::array<Real, neqs>;
     using rhs_type = std::array<Real, neqs>;
@@ -40,8 +40,9 @@ struct RobertsonRODAS {
 };
 
 int main() {
-    auto integrator = RODAS<RobertsonRODAS>{};
-    auto state = RODASState<3>{};
+    using Integrator = Rosenbrock<RobertsonRosenbrock>;
+    auto integrator = Integrator{};
+    auto state = Integrator::State{};
     state.jacobian_analytic = true;
     state.autonomous = true;
     state.t = 0.0;
@@ -51,7 +52,7 @@ int main() {
     state.atol = 1.e-12;
     state.y = {1.0, 0.0, 0.0};
 
-    auto problem_state = RobertsonRODAS::state_type{1.0, 0.0, 0.0};
+    auto problem_state = RobertsonRosenbrock::state_type{1.0, 0.0, 0.0};
     const auto result = integrator.integrate(problem_state, state);
     if (result != IntegratorResult::SUCCESS) {
         std::cerr << "ROS2S failed with code " << static_cast<int>(result) << "\n";

@@ -7,7 +7,7 @@
 #include "backward_euler.hpp"
 #include "integrator_types.hpp"
 #include "linear_algebra.hpp"
-#include "rodas.hpp"
+#include "rosenbrock.hpp"
 #include "vode.hpp"
 #include "yass.hpp"
 
@@ -20,8 +20,7 @@ template <typename Problem> struct IntegratorFactory {
         BACKWARD_EULER,
         YASS,
         VODE,
-        ROS2S,
-        RODAS = ROS2S,
+        ROSENBROCK,
         ROS2,
         ROSENBROCK_SANDU_A,
         ROSENBROCK_SANDU_B,
@@ -34,8 +33,8 @@ template <typename Problem> struct IntegratorFactory {
             return BackwardEuler<Problem>{};
         } else if constexpr (IntType == Type::YASS) {
             return YASS<Problem>{};
-        } else if constexpr (IntType == Type::ROS2S) {
-            return ROS2S<Problem>{};
+        } else if constexpr (IntType == Type::ROSENBROCK) {
+            return Rosenbrock<Problem>{};
         } else if constexpr (IntType == Type::ROS2) {
             return Ros2<Problem>{};
         } else if constexpr (IntType == Type::ROSENBROCK_SANDU_A) {
@@ -62,12 +61,18 @@ template <typename Problem> struct IntegratorFactory {
             return state_identity<BackwardEulerState<ProblemTraits<Problem>::neqs>>{};
         } else if constexpr (IntType == Type::YASS) {
             return state_identity<YASSState<ProblemTraits<Problem>::neqs>>{};
-        } else if constexpr (IntType == Type::ROS2S || IntType == Type::ROS2 ||
-                             IntType == Type::ROSENBROCK_SANDU_A ||
-                             IntType == Type::ROSENBROCK_SANDU_B ||
-                             IntType == Type::ROSENBROCK_SANDU_C ||
-                             IntType == Type::ROSENBROCK_SANDU_D) {
-            return state_identity<RODASState<ProblemTraits<Problem>::neqs>>{};
+        } else if constexpr (IntType == Type::ROSENBROCK) {
+            return state_identity<typename Rosenbrock<Problem>::State>{};
+        } else if constexpr (IntType == Type::ROS2) {
+            return state_identity<typename Ros2<Problem>::State>{};
+        } else if constexpr (IntType == Type::ROSENBROCK_SANDU_A) {
+            return state_identity<typename RosenbrockSanduA<Problem>::State>{};
+        } else if constexpr (IntType == Type::ROSENBROCK_SANDU_B) {
+            return state_identity<typename RosenbrockSanduB<Problem>::State>{};
+        } else if constexpr (IntType == Type::ROSENBROCK_SANDU_C) {
+            return state_identity<typename RosenbrockSanduC<Problem>::State>{};
+        } else if constexpr (IntType == Type::ROSENBROCK_SANDU_D) {
+            return state_identity<typename RosenbrockSanduD<Problem>::State>{};
         } else {
             static_assert(IntType == Type::VODE, "Unsupported integrator type");
             return state_identity<VODEState<ProblemTraits<Problem>::neqs>>{};
@@ -85,9 +90,7 @@ template <typename Problem> using YASS_Integrator = YASS<Problem>;
 
 template <typename Problem> using VODE_Integrator = VODE<Problem>;
 
-template <typename Problem> using RODAS_Integrator = RODAS<Problem>;
-
-template <typename Problem> using ROS2S_Integrator = ROS2S<Problem>;
+template <typename Problem> using Rosenbrock_Integrator = Rosenbrock<Problem>;
 
 template <typename Problem> using Ros2_Integrator = Ros2<Problem>;
 
