@@ -107,9 +107,9 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
 
 namespace detail {
 
-enum class RosenbrockMethod { ROS2S, SanduA, SanduB, SanduC, SanduD };
+enum class RosenbrockMethod { ROS2S, Ros2, SanduA, SanduB, SanduC, SanduD };
 
-enum class RosenbrockErrorEstimator { StageWeights, FirstStage, EmbeddedWeights };
+enum class RosenbrockErrorEstimator { StageWeights, FirstStage, EmbeddedWeights, EmbeddedFirstOrder };
 
 template <RosenbrockMethod Method> struct RosenbrockCoefficients;
 
@@ -165,6 +165,62 @@ template <> struct RosenbrockCoefficients<RosenbrockMethod::ROS2S> {
     static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
         constexpr Real table[4]{-0.23570226039551292, -0.23570226039551567,
                                 -0.13807118745769906, 0.0};
+        return table[i];
+    }
+};
+
+template <> struct RosenbrockCoefficients<RosenbrockMethod::Ros2> {
+    static constexpr int stages = 2;
+    static constexpr int rhs_evaluations_per_step = stages;
+    static constexpr bool reuse_first_stage_rhs = false;
+    static constexpr bool reuse_second_stage_rhs = false;
+    static constexpr RosenbrockErrorEstimator error_estimator =
+        RosenbrockErrorEstimator::EmbeddedFirstOrder;
+    static constexpr Real gamma = 1.7071067811865475; // 1 + sqrt(2) / 2
+    static constexpr Real first_stage_weight = 0.0;
+    static inline constexpr std::array<Real, 4> alpha{0.0, 1.0, 0.0, 0.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.5857864376269049, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{-1.1715728752538097, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+        {{0.0, 0.0, 0.0, 0.0}},
+    }};
+    static inline constexpr std::array<Real, 4> m{0.8786796564403572, 0.2928932188134524,
+                                                   0.0, 0.0};
+    static inline constexpr std::array<Real, 4> err{0.2928932188134523, 0.2928932188134524,
+                                                     0.0, 0.0};
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 1.0, 0.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {0.5857864376269049, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {-1.1715728752538097, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{0.8786796564403572, 0.2928932188134524, 0.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{0.2928932188134523, 0.2928932188134524, 0.0, 0.0};
         return table[i];
     }
 };
@@ -582,6 +638,9 @@ class RosenbrockIntegrator {
     template <typename C> static INTEGRATORS_HOST_DEVICE Real controller_factor(Real err) {
         if constexpr (C::error_estimator == detail::RosenbrockErrorEstimator::FirstStage) {
             return std::sqrt(err);
+        } else if constexpr (C::error_estimator ==
+                             detail::RosenbrockErrorEstimator::EmbeddedFirstOrder) {
+            return std::sqrt(err);
         } else {
             return std::cbrt(err);
         }
@@ -811,6 +870,14 @@ template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats
 using ROS2S = RosenbrockIntegrator<Problem, detail::RosenbrockMethod::ROS2S, AnalyticJacobianOnly,
                                    CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
                                    ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
+
+template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
+          bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,
+          bool ExternalMatrixStorage = false, bool CompactRhsScratch = false,
+          bool StaticTolerances = false>
+using Ros2 = RosenbrockIntegrator<Problem, detail::RosenbrockMethod::Ros2, AnalyticJacobianOnly,
+                                  CollectStats, AllowPivoting, UsePrimordialGiftFactorization,
+                                  ExternalMatrixStorage, CompactRhsScratch, StaticTolerances>;
 
 template <typename Problem, bool AnalyticJacobianOnly = false, bool CollectStats = true,
           bool AllowPivoting = true, bool UsePrimordialGiftFactorization = false,

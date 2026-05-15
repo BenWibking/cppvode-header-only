@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-METHODS = ["ros2s", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
+METHODS = ["ros2s", "ros2", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
 
 
 def extract_csv_block(text: str) -> list[dict[str, str]]:

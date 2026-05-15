@@ -22,6 +22,7 @@ template <typename Problem> struct IntegratorFactory {
         VODE,
         ROS2S,
         RODAS = ROS2S,
+        ROS2,
         ROSENBROCK_SANDU_A,
         ROSENBROCK_SANDU_B,
         ROSENBROCK_SANDU_C,
@@ -35,6 +36,8 @@ template <typename Problem> struct IntegratorFactory {
             return YASS<Problem>{};
         } else if constexpr (IntType == Type::ROS2S) {
             return ROS2S<Problem>{};
+        } else if constexpr (IntType == Type::ROS2) {
+            return Ros2<Problem>{};
         } else if constexpr (IntType == Type::ROSENBROCK_SANDU_A) {
             return RosenbrockSanduA<Problem>{};
         } else if constexpr (IntType == Type::ROSENBROCK_SANDU_B) {
@@ -59,7 +62,8 @@ template <typename Problem> struct IntegratorFactory {
             return state_identity<BackwardEulerState<ProblemTraits<Problem>::neqs>>{};
         } else if constexpr (IntType == Type::YASS) {
             return state_identity<YASSState<ProblemTraits<Problem>::neqs>>{};
-        } else if constexpr (IntType == Type::ROS2S || IntType == Type::ROSENBROCK_SANDU_A ||
+        } else if constexpr (IntType == Type::ROS2S || IntType == Type::ROS2 ||
+                             IntType == Type::ROSENBROCK_SANDU_A ||
                              IntType == Type::ROSENBROCK_SANDU_B ||
                              IntType == Type::ROSENBROCK_SANDU_C ||
                              IntType == Type::ROSENBROCK_SANDU_D) {
@@ -84,6 +88,8 @@ template <typename Problem> using VODE_Integrator = VODE<Problem>;
 template <typename Problem> using RODAS_Integrator = RODAS<Problem>;
 
 template <typename Problem> using ROS2S_Integrator = ROS2S<Problem>;
+
+template <typename Problem> using Ros2_Integrator = Ros2<Problem>;
 
 template <typename Problem> using RosenbrockSanduA_Integrator = RosenbrockSanduA<Problem>;
 

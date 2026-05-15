@@ -40,6 +40,19 @@ def paper_method_ab_r(z):
     return (1.0 - a * z) / (1.0 - gamma * z) ** 3
 
 
+def paper_ros2_r(z):
+    sqrt2 = math.sqrt(2.0)
+    gamma = 1.0 + sqrt2 / 2.0
+    a21 = 2.0 - sqrt2
+    c21 = -4.0 + 2.0 * sqrt2
+    m1 = (6.0 - 3.0 * sqrt2) / 2.0
+    m2 = 1.0 - sqrt2 / 2.0
+    d = 1.0 - gamma * z
+    k1 = gamma * z / d
+    k2 = gamma * (z * (1.0 + a21 * k1) + c21 * k1) / d
+    return 1.0 + m1 * k1 + m2 * k2
+
+
 def paper_method_d_r(z):
     return (1.0 - z) / (1.0 - 0.5 * z) ** 4
 
@@ -67,6 +80,7 @@ def draw(z_min, out, title):
     z = np.linspace(z_min, 0.0, 2001)
     fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=160)
     ax.plot(z, code_ros2s_r(z), lw=2.2, label="Code ROS2S")
+    ax.plot(z, paper_ros2_r(z), lw=2.0, ls="-", label="Paper Ros2")
     ax.plot(z, paper_method_ab_r(z), lw=2.0, ls="--", label="Paper Method A/B")
     ax.plot(z, paper_method_c_r(z), lw=2.0, ls=":", label="Paper Method C")
     ax.plot(z, paper_method_d_r(z), lw=2.0, ls="-.", label="Paper Method D")

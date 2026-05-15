@@ -82,6 +82,19 @@ Real method_ab_transfer(Real z) {
 
 Real method_d_transfer(Real z) { return (1.0 - z) / std::pow(1.0 - 0.5 * z, 4); }
 
+Real paper_ros2_transfer(Real z) {
+    constexpr Real gamma = 1.7071067811865475;
+    constexpr Real a21 = 0.5857864376269049;
+    constexpr Real c21 = -1.1715728752538097;
+    constexpr Real m1 = 0.8786796564403572;
+    constexpr Real m2 = 0.2928932188134524;
+
+    const Real solve_scale = gamma / (1.0 - gamma * z);
+    const Real k1 = solve_scale * z;
+    const Real k2 = solve_scale * (z * (1.0 + a21 * k1) + c21 * k1);
+    return 1.0 + m1 * k1 + m2 * k2;
+}
+
 Real method_c_transfer(Real z) {
     constexpr Real gamma = 0.78867513459481275;
     constexpr Real a31 = -0.4335531486700170;
@@ -105,6 +118,10 @@ int main() {
     constexpr Real h = 0.1;
     constexpr Real z = -1.0;
 
+    if (!check_one_step<Ros2<ScalarDecaySandu>>(h, paper_ros2_transfer(z),
+                                                "PaperRos2", 2)) {
+        return 1;
+    }
     if (!check_one_step<RosenbrockSanduA<ScalarDecaySandu>>(h, method_ab_transfer(z),
                                                             "RosenbrockSanduA", 2)) {
         return 1;

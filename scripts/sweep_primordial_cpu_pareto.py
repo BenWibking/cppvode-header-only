@@ -29,13 +29,14 @@ def parse_metric(pattern: str, text: str) -> float:
     return float(match.group(1))
 
 
-DEFAULT_ROSENBROCK_INTEGRATORS = ["ros2s", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
+DEFAULT_ROSENBROCK_INTEGRATORS = ["ros2s", "ros2", "sandu-a", "sandu-b", "sandu-c", "sandu-d"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X"]
 
 
 def display_name(integrator: str) -> str:
     return {
         "ros2s": "ROS2S",
+        "ros2": "Ros2",
         "sandu-a": "Sandu A",
         "sandu-b": "Sandu B",
         "sandu-c": "Sandu C",
