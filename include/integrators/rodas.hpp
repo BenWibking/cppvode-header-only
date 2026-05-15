@@ -98,6 +98,7 @@ struct RODASState : public RODASToleranceStorage<N, StaticTolerances>,
     std::array<Real, N> ak1{};
     std::array<Real, N> ak2{};
     std::array<Real, N> ak3{};
+    std::array<Real, N> rhs_reuse{};
     std::array<Real, N> work{};
     std::array<int, N> ip{};
 };
@@ -112,95 +113,216 @@ template <RosenbrockMethod Method> struct RosenbrockCoefficients;
 
 template <> struct RosenbrockCoefficients<RosenbrockMethod::ROS2S> {
     static constexpr int stages = 3;
+    static constexpr int rhs_evaluations_per_step = stages;
+    static constexpr bool reuse_second_stage_rhs = false;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::StageWeights;
     static constexpr Real gamma = 0.292893218813452;
-    static constexpr std::array<Real, 4> alpha{0.0, 0.585786437626905, 1.0, 0.0};
-    static constexpr std::array<std::array<Real, 4>, 4> a{{
+    static inline constexpr std::array<Real, 4> alpha{0.0, 0.585786437626905, 1.0, 0.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{2.0000000000000036, 0.0, 0.0, 0.0}},
         {{6.828427124746214, 3.4142135623731007, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<std::array<Real, 4>, 4> c{{
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{-6.828427124746214, 0.0, 0.0, 0.0}},
         {{-10.949747468305889, -7.535533905932761, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<Real, 4> m{6.828427124746214, 3.414213562373101, 1.0, 0.0};
-    static constexpr std::array<Real, 4> err{-0.23570226039551292, -0.23570226039551567,
-                                             -0.13807118745769906, 0.0};
+    static inline constexpr std::array<Real, 4> m{6.828427124746214, 3.414213562373101, 1.0, 0.0};
+    static inline constexpr std::array<Real, 4> err{-0.23570226039551292, -0.23570226039551567,
+                                                    -0.13807118745769906, 0.0};
     static constexpr Real first_stage_weight = 0.0;
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 0.585786437626905, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {2.0000000000000036, 0.0, 0.0, 0.0},
+            {6.828427124746214, 3.4142135623731007, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {-6.828427124746214, 0.0, 0.0, 0.0},
+            {-10.949747468305889, -7.535533905932761, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{6.828427124746214, 3.414213562373101, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{-0.23570226039551292, -0.23570226039551567,
+                                -0.13807118745769906, 0.0};
+        return table[i];
+    }
 };
 
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduA> {
     static constexpr int stages = 3;
+    static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::FirstStage;
     static constexpr Real gamma = 0.7886751345948129;              // (3 + sqrt(3)) / 6
     static constexpr Real first_stage_weight = 1.2679491924311228; // 1 / gamma
-    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
-    static constexpr std::array<std::array<Real, 4>, 4> a{{
+    static inline constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{1.2679491924311228, 0.0, 0.0, 0.0}},
         {{1.2679491924311228, 0.0, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<std::array<Real, 4>, 4> c{{
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{0.9282032302755092, 0.0, 0.0, 0.0}},
         {{-0.4641016151377544, -0.4641016151377544, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
-    static constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+    static inline constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
+    static inline constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 1.0, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {1.2679491924311228, 0.0, 0.0, 0.0},
+            {1.2679491924311228, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {0.9282032302755092, 0.0, 0.0, 0.0},
+            {-0.4641016151377544, -0.4641016151377544, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{1.2679491924311228, 0.0, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{0.0, 0.0, 0.0, 0.0};
+        return table[i];
+    }
 };
 
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduB> {
     static constexpr int stages = 3;
+    static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::FirstStage;
     static constexpr Real gamma = 0.7886751345948129;              // (3 + sqrt(3)) / 6
     static constexpr Real first_stage_weight = 1.2679491924311228; // 1 / gamma
-    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
-    static constexpr std::array<std::array<Real, 4>, 4> a{{
+    static inline constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 0.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{1.2679491924311228, 0.0, 0.0, 0.0}},
         {{1.2679491924311228, 0.0, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<std::array<Real, 4>, 4> c{{
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
         {{-0.5358983848622456, -0.7320508075688772, 0.0, 0.0}},
         {{0.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
-    static constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+    static inline constexpr std::array<Real, 4> m{1.2679491924311228, 0.0, 1.0, 0.0};
+    static inline constexpr std::array<Real, 4> err{0.0, 0.0, 0.0, 0.0};
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 1.0, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {1.2679491924311228, 0.0, 0.0, 0.0},
+            {1.2679491924311228, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0},
+            {-0.5358983848622456, -0.7320508075688772, 0.0, 0.0},
+            {0.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{1.2679491924311228, 0.0, 1.0, 0.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{0.0, 0.0, 0.0, 0.0};
+        return table[i];
+    }
 };
 
 template <> struct RosenbrockCoefficients<RosenbrockMethod::SanduD> {
     static constexpr int stages = 4;
+    static constexpr int rhs_evaluations_per_step = 2;
+    static constexpr bool reuse_second_stage_rhs = true;
     static constexpr RosenbrockErrorEstimator error_estimator =
         RosenbrockErrorEstimator::EmbeddedWeights;
     static constexpr Real gamma = 0.5;
     static constexpr Real first_stage_weight = 0.0;
-    static constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 1.0};
-    static constexpr std::array<std::array<Real, 4>, 4> a{{
+    static inline constexpr std::array<Real, 4> alpha{0.0, 1.0, 1.0, 1.0};
+    static inline constexpr std::array<std::array<Real, 4>, 4> a{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{2.0, 0.0, 0.0, 0.0}},
         {{2.0, 0.0, 0.0, 0.0}},
         {{2.0, 0.0, 0.0, 0.0}},
     }};
-    static constexpr std::array<std::array<Real, 4>, 4> c{{
+    static inline constexpr std::array<std::array<Real, 4>, 4> c{{
         {{0.0, 0.0, 0.0, 0.0}},
         {{-1.3333333333333333, 0.0, 0.0, 0.0}},
         {{-3.3333333333333333, -2.0, 0.0, 0.0}},
         {{-0.5, 0.0, 1.5, 0.0}},
     }};
-    static constexpr std::array<Real, 4> m{2.0, 0.0, 0.0, 1.0};
-    static constexpr std::array<Real, 4> err{-0.6666666666666666, -1.0, -1.0, 1.3333333333333333};
+    static inline constexpr std::array<Real, 4> m{2.0, 0.0, 0.0, 1.0};
+    static inline constexpr std::array<Real, 4> err{-0.6666666666666666, -1.0, -1.0, 1.3333333333333333};
+    static INTEGRATORS_HOST_DEVICE constexpr Real alpha_value(int i) {
+        constexpr Real table[4]{0.0, 1.0, 1.0, 1.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real a_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {2.0, 0.0, 0.0, 0.0},
+            {2.0, 0.0, 0.0, 0.0},
+            {2.0, 0.0, 0.0, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real c_value(int i, int j) {
+        constexpr Real table[4][4]{
+            {0.0, 0.0, 0.0, 0.0},
+            {-1.3333333333333333, 0.0, 0.0, 0.0},
+            {-3.3333333333333333, -2.0, 0.0, 0.0},
+            {-0.5, 0.0, 1.5, 0.0}};
+        return table[i][j];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real m_value(int i) {
+        constexpr Real table[4]{2.0, 0.0, 0.0, 1.0};
+        return table[i];
+    }
+    static INTEGRATORS_HOST_DEVICE constexpr Real err_value(int i) {
+        constexpr Real table[4]{-0.6666666666666666, -1.0, -1.0, 1.3333333333333333};
+        return table[i];
+    }
 };
 
 } // namespace detail
@@ -333,17 +455,31 @@ class RosenbrockIntegrator {
         for (size_type i = 0; i < N; ++i) {
             Real yi = s.y[i];
             for (int j = 0; j < stage; ++j) {
-                yi += C::a[stage][j] * stage_vector(s, j)[i];
+                yi += C::a_value(stage, j) * stage_vector(s, j)[i];
             }
             s.ynew[i] = yi;
         }
 
+        std::array<Real, N> *rhs_values = nullptr;
+        if constexpr (C::reuse_second_stage_rhs) {
+            if (stage > 1) {
+                rhs_values = &s.rhs_reuse;
+            }
+        }
         auto &rhs_tmp = s.rhs_scratch(s.ynew);
-        rhs(x + C::alpha[stage] * h, s.ynew, rhs_tmp);
+        if (rhs_values == nullptr) {
+            rhs(x + C::alpha_value(stage) * h, s.ynew, rhs_tmp);
+            if constexpr (C::reuse_second_stage_rhs) {
+                if (stage == 1) {
+                    s.rhs_reuse = rhs_tmp;
+                }
+            }
+            rhs_values = &rhs_tmp;
+        }
         for (size_type i = 0; i < N; ++i) {
-            Real rhs_i = rhs_tmp[i];
+            Real rhs_i = (*rhs_values)[i];
             for (int j = 0; j < stage; ++j) {
-                rhs_i += (C::c[stage][j] / h) * stage_vector(s, j)[i];
+                rhs_i += (C::c_value(stage, j) / h) * stage_vector(s, j)[i];
             }
             ak[i] = rhs_i;
         }
@@ -354,7 +490,7 @@ class RosenbrockIntegrator {
         for (size_type i = 0; i < N; ++i) {
             Real solution_i = s.y[i];
             for (int j = 0; j < C::stages; ++j) {
-                solution_i += C::m[j] * stage_vector(s, j)[i];
+                solution_i += C::m_value(j) * stage_vector(s, j)[i];
             }
 
             Real error_i = 0.0;
@@ -362,7 +498,7 @@ class RosenbrockIntegrator {
                 error_i = solution_i - (s.y[i] + C::first_stage_weight * s.ak1[i]);
             } else {
                 for (int j = 0; j < C::stages; ++j) {
-                    error_i += C::err[j] * stage_vector(s, j)[i];
+                    error_i += C::err_value(j) * stage_vector(s, j)[i];
                 }
             }
 
@@ -524,7 +660,7 @@ class RosenbrockIntegrator {
                     compute_stage<C>(s, x, h, stage);
                 }
                 form_solution_and_error<C>(s);
-                record_rhs(s, C::stages);
+                record_rhs(s, C::rhs_evaluations_per_step);
                 n_step += 1;
                 record_step(s, n_step);
 
